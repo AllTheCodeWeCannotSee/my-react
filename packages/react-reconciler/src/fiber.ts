@@ -82,6 +82,13 @@ export class FiberRootNode {
 	}
 }
 
+/**
+ *
+ * @description 输入一个fiber node，得到双缓冲树对应的node
+ * @param current
+ * @param pendingProps
+ * @returns {FiberNode} wip，双缓冲树的另一个
+ */
 export const createWorkInProgress = (
 	current: FiberNode,
 	pendingProps: Props
