@@ -11,7 +11,9 @@ function prepareFreshStack(root: FiberRootNode) {
 
 export function scheduleUpdateOnFiber(fiber: FiberNode) {
 	// TODO 调度功能
-	// fiberRootNode
+	/**
+	 * @param root fiberRootNode
+	 */
 	const root = markUpdateFromFiberToRoot(fiber);
 	renderRoot(root);
 }
@@ -37,10 +39,18 @@ function renderRoot(root: FiberRootNode) {
 			workLoop();
 			break;
 		} catch (e) {
-			console.warn('workLoop发生错误', e);
+			if (__DEV__) {
+				console.warn('workLoop发生错误', e);
+			}
 			workInProgress = null;
 		}
 	} while (true);
+	const finishedWork = root.current.alternate;
+	root.finishedWork = finishedWork;
+
+	// TODO: commitRoot
+	// wip fiberNode树 树中的flags
+	// commitRoot(root);
 }
 
 function workLoop() {
