@@ -1,3 +1,4 @@
+// WorkTag用来标记fiber node的类型
 export type WorkTag =
 	| typeof FunctionComponent
 	| typeof HostRoot
