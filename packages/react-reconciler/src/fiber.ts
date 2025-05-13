@@ -4,6 +4,11 @@ import { Flags, NoFlags } from './fiberFlags';
 import { Container } from 'hostConfig';
 
 export class FiberNode {
+	// type
+	// 对于类组件 (Class Component) Fiber 节点： type 指向的是该类组件的构造函数 (constructor) 本身
+	// 对于函数组件 (Function Component) Fiber 节点： type 指向的是该函数组件本身
+	// 对于宿主组件 (Host Component) Fiber 节点 (例如 <div>, <span>, <p> 等原生 DOM 元素)： type 是一个字符串，表示该 DOM 元素的标签名
+	// 对于原生 React 元素，如 Fragment、Profiler、StrictMode、Suspense、ContextProvider、ContextConsumer 等： type 通常是 React 内部定义的特殊 Symbol 值或者对象，用来标识这些特定的 React 结构
 	type: any;
 	tag: WorkTag;
 	pendingProps: Props;
