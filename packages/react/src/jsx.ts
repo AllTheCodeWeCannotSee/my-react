@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { REACT_ELEMENT_TYPE } from 'shared/ReactSymbols';
 import {
 	Type,
@@ -8,6 +7,8 @@ import {
 	ReactElementType,
 	ElementType
 } from 'shared/ReactTypes';
+
+// ReactElement
 
 const ReactElement = function (
 	type: Type,
@@ -26,35 +27,45 @@ const ReactElement = function (
 	return element;
 };
 
-export const jsx = function (
-	type: ElementType,
-	config: any,
-	...maybeChildren: any
-) {
-	let key: Key = null;
-	let ref: Ref = null;
-	const props: Props = {};
+export function isValidElement(object: any) {
+	return (
+		typeof object === 'object' &&
+		object !== null &&
+		object.$$typeof === REACT_ELEMENT_TYPE
+	);
+}
 
-	for (const k in config) {
-		const v = config[k];
-		if (k === 'key') {
-			if (v !== undefined) {
-				key += '' + k;
+export const jsx = (type: ElementType, config: any, ...maybeChildren: any) => {
+	let key: Key = null;
+	const props: Props = {};
+	let ref: Ref = null;
+
+	for (const prop in config) {
+		const val = config[prop];
+		if (prop === 'key') {
+			if (val !== undefined) {
+				key = '' + val;
 			}
 			continue;
 		}
-		if (k === 'ref') {
-			if (v !== undefined) {
-				ref = v;
+		if (prop === 'ref') {
+			if (val !== undefined) {
+				ref = val;
 			}
 			continue;
 		}
-		if ({}.hasOwnProperty.call(config, k)) {
-			props[k] = v;
+		if ({}.hasOwnProperty.call(config, prop)) {
+			props[prop] = val;
 		}
 	}
-	props.children =
-		maybeChildren?.length === 1 ? maybeChildren[0] : maybeChildren;
+	const maybeChildrenLength = maybeChildren.length;
+	if (maybeChildrenLength) {
+		if (maybeChildrenLength === 1) {
+			props.children = maybeChildren[0];
+		} else {
+			props.children = maybeChildren;
+		}
+	}
 	return ReactElement(type, key, ref, props);
 };
 

@@ -33,7 +33,8 @@ export default defineConfig([
 		languageOptions: {
 			globals: {
 				...globals.browser,
-				...globals.node
+				...globals.node,
+				...globals.jest
 			},
 
 			parser: tsParser,
@@ -46,7 +47,8 @@ export default defineConfig([
 			'no-case-declarations': 'off',
 			'no-constant-condition': 'off',
 			'@typescript-eslint/ban-ts-comment': 'off',
-			'@typescript-eslint/no-explicit-any': 'off'
+			'@typescript-eslint/no-explicit-any': 'off',
+			'no-unused-vars': 'off'
 		}
 	}
 ]);
