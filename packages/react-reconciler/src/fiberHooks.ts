@@ -7,18 +7,22 @@ import {
 	createUpdate,
 	createUpdateQueue,
 	enqueueUpdate,
+	processUpdateQueue,
 	UpdateQueue
 } from './updateQueue';
 import { scheduleUpdateOnFiber } from './workLoop';
 
 let currentlyRenderingFiber: FiberNode | null = null;
+
 // 指向链表中当前正在处理的hook（fiberNode 中的 memoizedState 指向一个链表，链表的元素是Hooks（useState、useEffect...））
 let workInProgressHook: Hook | null = null;
+let currentHook: Hook | null = null;
 
 const { currentDispatcher } = internals;
 
 /**
- * @property {any} memoizedState - 此hook的自身状态
+ * @property {any} memoizedState - 存储了 Hook 的核心数据（如状态值）
+ * @property {unknown} updateQueue - 与该 Hook 相关的更新队列
  * @property {Hook} next - 指向下一个hook
  */
 interface Hook {
@@ -39,13 +43,14 @@ export function renderWithHooks(wip: FiberNode) {
 	// 目的：hook要知道自身数据保存在哪里
 	// 作用：记录当前正在render的FC对应的fiberNode，在fiberNode中保存hook数据
 	currentlyRenderingFiber = wip;
-	// 重置
+	// 重置 hooks链表
 	wip.memoizedState = null;
 
 	const current = wip.alternate;
 
 	if (current !== null) {
 		// update
+		currentDispatcher.current = HooksDispatcherOnUpdate;
 	} else {
 		// mount
 		currentDispatcher.current = HooksDispatcherOnMount;
@@ -53,16 +58,136 @@ export function renderWithHooks(wip: FiberNode) {
 	// wip.type: 这个 type 属性对于函数式组件来说，就是那个组件函数本身
 	const Component = wip.type;
 	const props = wip.pendingProps;
+	// FC render
 	const children = Component(props);
 
 	// 重置操作
 	currentlyRenderingFiber = null;
+	workInProgressHook = null;
+	currentHook = null;
 	return children;
 }
 
 const HooksDispatcherOnMount: Dispatcher = {
 	useState: mountState
 };
+
+const HooksDispatcherOnUpdate: Dispatcher = {
+	useState: updateState
+};
+
+/**
+ * @description
+ * * 联系：当一个已经挂载的组件因为状态变化或其他原因需要重新渲染时，它内部的 useState 调用就会走到这个
+ * * 流程：
+ * 	* 找到当前这个 useState 调用在上一次渲染时对应的状态数据。
+ * 	* 检查是否有新的状态更新请求（即，是否调用了 setState）。
+ * 	* 如果有，则计算出新的状态。
+ * 	* 返回最新的状态值和对应的 setState 函数。
+ * @returns
+ */
+function updateState<State>(): [State, Dispatch<State>] {
+	// 找到当前useState对应的hook数据
+	const hook = updateWorkInProgresHook();
+
+	// 计算新state的逻辑
+	const queue = hook.updateQueue as UpdateQueue<State>;
+	const pending = queue.shared.pending;
+
+	if (pending !== null) {
+		const { memoizedState } = processUpdateQueue(hook.memoizedState, pending);
+		hook.memoizedState = memoizedState;
+	}
+
+	return [hook.memoizedState, queue.dispatch as Dispatch<State>];
+}
+
+/**
+ * @description
+ * * 作用：
+ * 	* 找到旧 Hook
+ * 	* 创建新 Hook
+ * 	* 维护 Hook 链表
+ * 	* 错误检测
+ * * 什么时候触发：
+ * 	* 交互阶段 onClick
+ * 	* render阶段 （TODO）
+ * @returns
+ */
+function updateWorkInProgresHook(): Hook {
+	// TODO render阶段触发的更新 (这个注释可能指未来需要处理在渲染阶段直接触发更新的复杂情况)
+	let nextCurrentHook: Hook | null; // 用来存储从上一次渲染的 Hook 链表中找到的、与当前 Hook 调用对应的那个 Hook 对象
+
+	// 1. 确定当前应该处理哪个 "current" Hook (来自上一次渲染的 Hook)
+	if (currentHook === null) {
+		// 这是这个函数组件在本次 update 过程中的第一个 Hook 调用
+		// currentHook 是一个模块级变量，用于在遍历一个组件的多个 Hook 时，追踪上一次渲染中对应的 Hook 链表的当前位置。
+		// 如果它是 null，说明我们正要处理这个组件的第一个 Hook。
+
+		const current = currentlyRenderingFiber?.alternate; // 获取上一次渲染完成的 Fiber 节点 (current tree)
+
+		if (current !== null) {
+			// 如果存在上一次渲染的 Fiber 节点 (即不是首次挂载后的第一次更新，而是后续的更新)
+			nextCurrentHook = current?.memoizedState; // 函数组件的 Fiber 节点的 `memoizedState` 属性指向其 Hook 链表的头节点。
+			// 所以，这里获取的是上一次渲染时该组件的第一个 Hook 对象。
+		} else {
+			// mount (理论上这个分支不应该在 updateWorkInProgresHook 中被走到)
+			// 因为 `renderWithHooks` 函数在 `current === null` (mount 阶段) 时，
+			// 会将 `currentDispatcher.current` 设置为 `HooksDispatcherOnMount`，
+			// 从而调用 `mountState` 和 `mountWorkInProgresHook`。
+			// 如果 `current !== null` (update 阶段)，才会设置为 `HooksDispatcherOnUpdate`，
+			// 进而调用 `updateState` 和 `updateWorkInProgresHook`。
+			// 所以，如果在这里 `current` 为 `null`，可能表示逻辑上的一个问题或未覆盖的边界情况。
+			// 但基于 `renderWithHooks` 的逻辑，`current` 在这里应该总是不为 `null`。
+			nextCurrentHook = null;
+		}
+	} else {
+		// 这不是本次 update 过程中的第一个 Hook 调用，而是后续的 Hook 调用。
+		// `currentHook` 此时指向的是上一次渲染中、与上一个已处理的 Hook 相对应的那个 Hook 对象。
+		nextCurrentHook = currentHook.next; // 移动到上一次渲染的 Hook 链表中的下一个 Hook 对象。
+	}
+
+	// 2. 检查 Hook 调用顺序是否一致
+	if (nextCurrentHook === null) {
+		// 如果 `nextCurrentHook` 为 `null`，意味着：
+		// - 情况1 (mount/update u1 u2 u3 / update u1 u2 u3 u4):
+		//   上一次渲染有 N 个 Hook，但本次渲染尝试获取第 N+1 个 Hook，说明本次渲染比上次多调用了 Hook。
+		//   这是不允许的，违反了 Hooks 的规则 (Hooks must be called in the same order each time a component renders)。
+		throw new Error(
+			`组件${currentlyRenderingFiber?.type}本次执行时的Hook比上次执行时多`
+		);
+	}
+
+	// 3. 更新 currentHook 指针，并创建新的 work-in-progress Hook
+	currentHook = nextCurrentHook as Hook; // 将 `currentHook` 指向从旧链表中找到的当前 Hook。
+	// 现在 `currentHook` 是新 Hook 的数据来源。
+
+	const newHook: Hook = {
+		// 创建一个新的 Hook 对象，用于本次渲染 (work-in-progress tree)
+		memoizedState: currentHook.memoizedState, // 复制上一次渲染的状态值
+		updateQueue: currentHook.updateQueue, // 复制上一次渲染的更新队列引用
+		next: null // next 指针暂时为 null，如果后面还有 Hook，会被连接上
+	};
+
+	// 4. 将新的 Hook 对象链接到 work-in-progress Fiber 的 Hook 链表中
+	// `workInProgressHook` 是一个模块级变量，用于在构建本次渲染的 Hook 链表时，追踪链表的尾部。
+	if (workInProgressHook === null) {
+		// 这是为当前 work-in-progress Fiber 创建的第一个 Hook 对象
+		if (currentlyRenderingFiber === null) {
+			// 安全检查：Hooks 必须在函数组件内部调用。
+			// `currentlyRenderingFiber` 应该由 `renderWithHooks` 设置。
+			throw new Error('请在函数组件内调用hook');
+		} else {
+			workInProgressHook = newHook; // `workInProgressHook` 指向这个新创建的 Hook (它现在是链表尾部)
+			currentlyRenderingFiber.memoizedState = workInProgressHook; // 将 work-in-progress Fiber 的 `memoizedState` 指向这个新 Hook (它也是链表头部)
+		}
+	} else {
+		// 这不是第一个 Hook，将新 Hook 连接到链表的末尾
+		workInProgressHook.next = newHook; // 将前一个 work-in-progress Hook 的 next 指向这个新 Hook
+		workInProgressHook = newHook; // 更新 `workInProgressHook`，使其指向新的链表尾部
+	}
+	return workInProgressHook; // 返回新创建并链接好的 Hook 对象
+}
 
 function mountState<State>(
 	initialState: (() => State) | State // 初始状态值，或者一个计算初始状态的函数

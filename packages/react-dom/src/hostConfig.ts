@@ -1,5 +1,18 @@
+import { FiberNode } from 'react-reconciler/src/fiber';
+import { HostText } from 'react-reconciler/src/workTags';
+
+/**
+ * @description 一个“容器”（Container）就是一个标准的浏览器 Element 对象
+ */
 export type Container = Element;
+/**
+ * @description
+ * 一个“实例”（Instance）指的是 React 创建和管理的、构成你 UI 的任何单个 DOM 元素
+ * 比如对应你 JSX 中宿主组件（host component）的 <div>、<p>、<span> 等
+ */
 export type Instance = Element;
+
+export type TextInstance = Text;
 
 export const createInstance = (type: string): Instance => {
 	// TODO 处理props
@@ -7,6 +20,9 @@ export const createInstance = (type: string): Instance => {
 	return element;
 };
 
+/**
+ * @description 将子 DOM 元素附加到一个父 DOM 元素上
+ */
 export const appendInitialChild = (
 	parent: Instance | Container,
 	child: Instance
@@ -14,8 +30,42 @@ export const appendInitialChild = (
 	parent.appendChild(child);
 };
 
+/**
+ * @description 这个函数用于在 DOM 中创建一个文本节点
+ */
 export const createTextInstance = (content: string) => {
 	return document.createTextNode(content);
 };
 
 export const appendChildToContainer = appendInitialChild;
+
+export function commitUpdate(fiber: FiberNode) {
+	switch (fiber.tag) {
+		case HostText:
+			const text = fiber.memoizedProps.content;
+			return commitTextUpdate(fiber.stateNode, text);
+
+		default:
+			if (__DEV__) {
+				console.warn('未实现的Update类型', fiber);
+			}
+			break;
+	}
+}
+
+/**
+ * @description 更新一个 DOM 文本节点的内容
+ */
+export function commitTextUpdate(textInstance: TextInstance, content: string) {
+	textInstance.textContent = content;
+}
+
+/**
+ * @description 这个函数的作用是从父容器中移除一个子 DOM 节点
+ */
+export function removeChild(
+	child: Instance | TextInstance,
+	container: Container
+) {
+	container.removeChild(child);
+}

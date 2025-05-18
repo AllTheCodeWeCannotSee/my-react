@@ -4,11 +4,6 @@ import { Flags, NoFlags } from './fiberFlags';
 import { Container } from 'hostConfig';
 
 export class FiberNode {
-	// type
-	// 对于类组件 (Class Component) Fiber 节点： type 指向的是该类组件的构造函数 (constructor) 本身
-	// 对于函数组件 (Function Component) Fiber 节点： type 指向的是该函数组件本身
-	// 对于宿主组件 (Host Component) Fiber 节点 (例如 <div>, <span>, <p> 等原生 DOM 元素)： type 是一个字符串，表示该 DOM 元素的标签名
-	// 对于原生 React 元素，如 Fragment、Profiler、StrictMode、Suspense、ContextProvider、ContextConsumer 等： type 通常是 React 内部定义的特殊 Symbol 值或者对象，用来标识这些特定的 React 结构
 	type: any;
 	tag: WorkTag;
 	pendingProps: Props;
@@ -28,10 +23,14 @@ export class FiberNode {
 	subtreeFlags: Flags;
 	updateQueue: unknown;
 
+	// 这个属性是一个数组，它持有那些需要从 DOM 中移除的子 FiberNode 的引用。
+	deletions: FiberNode[] | null;
+
 	constructor(tag: WorkTag, pendingProps: Props, key: Key) {
 		// 实例
 		this.tag = tag;
 		this.key = key;
+
 		// 对于类组件 (Class Component) Fiber 节点, stateNode 指向的是该类组件的实例
 		// 对于宿主组件 (Host Component) Fiber 节点, stateNode 指向的是该 Fiber 节点对应的真实 DOM 元素
 		// 对于函数组件 (Function Component) Fiber 节点, 在现代 React (特别是引入 Hooks 之后)，函数组件本身没有实例。因此，对于函数组件的 Fiber 节点，stateNode 通常是 null。函数组件的状态和副作用是通过 Hooks 来管理的，这些信息存储在 Fiber 节点的其他属性上（如 memoizedState，用于存储 Hooks 的链表）。
@@ -72,6 +71,7 @@ export class FiberNode {
 		// 副作用
 		this.flags = NoFlags;
 		this.subtreeFlags = NoFlags;
+		this.deletions = null;
 	}
 }
 
@@ -91,17 +91,19 @@ export class FiberRootNode {
 
 /**
  *
- * @description 输入一个fiber node，得到双缓冲树对应的node
- * @param current
- * @param pendingProps
- * @returns {FiberNode} wip，双缓冲树的另一个
+ * @description 负责创建或复用一个与 current Fiber 节点相对应的 wip Fiber 节点
+ * @param current current node，来自当前已渲染树的 FiberNode
+ * @param pendingProps 这个 Fiber 应该处理的新 props
+ * @returns {FiberNode} 返回wip fibernode
  */
 export const createWorkInProgress = (
 	current: FiberNode,
 	pendingProps: Props
 ): FiberNode => {
+	// 1. 尝试获取 alternate (如果存在的话，它是上一个渲染周期中的 wip 节点)
 	let wip = current.alternate;
 
+	// 2. 处理 "mount" 情况 (这个 Fiber 首次在 wip 树中被处理，或者没有 alternate 存在)
 	if (wip === null) {
 		// mount
 		wip = new FiberNode(current.tag, pendingProps, current.key);
@@ -109,18 +111,23 @@ export const createWorkInProgress = (
 
 		wip.alternate = current;
 		current.alternate = wip;
+		// 3. 处理 "update" 情况 (一个 alternate/wip 节点已经存在，所以我们复用它)
 	} else {
 		// update
 		wip.pendingProps = pendingProps;
 		wip.flags = NoFlags;
 		wip.subtreeFlags = NoFlags;
+		wip.deletions = null;
 	}
+
+	// 4. mount 和 update 情况下都会复制/设置的通用属性：
 	wip.type = current.type;
 	wip.updateQueue = current.updateQueue;
 	wip.child = current.child;
 	wip.memoizedProps = current.memoizedProps;
 	wip.memoizedState = current.memoizedState;
 
+	// 5. 返回 work-in-progress FiberNode
 	return wip;
 };
 
