@@ -12,6 +12,7 @@ import {
 	HostComponent,
 	FunctionComponent
 } from './workTags';
+import { updateFiberProps } from 'react-dom/src/SyntheticEvent';
 
 /**
  * @description 给传入的 fiber 节点的 flags 属性添加上 Update 标记。
@@ -28,28 +29,22 @@ function markUpdate(fiber: FiberNode) {
  * @returns
  */
 export const completeWork = (wip: FiberNode) => {
-	// 1. 获取当前工作中的 Fiber 节点 (wip) 将要使用的新 props
 	const newProps = wip.pendingProps;
-	// 2. 获取与当前 wip Fiber 对应的 current Fiber (上一次渲染的 Fiber 节点)
-	//    如果 current 为 null，表示这是一个全新的节点 (挂载阶段)
+	// 2. 获取与当前 wip Fiber 对应的 current Fiber (上一次渲染的 Fiber 节点). 如果 current 为 null，表示这是一个全新的节点 (挂载阶段)
 	const current = wip.alternate;
 
-	// 3. 根据 wip Fiber 节点的类型 (wip.tag) 执行不同的操作
 	switch (wip.tag) {
 		// 4. 如果是宿主组件 (HostComponent)，例如 <div>, <p> 等HTML元素
 		case HostComponent:
 			// 5. 检查是否是更新过程 (current 存在) 并且真实 DOM 元素已创建 (wip.stateNode 存在)
 			if (current !== null && wip.stateNode) {
-				// 6. 更新路径：这里应该处理 DOM 属性的更新。
-				//    在一个完整的实现中，会比较 newProps 和 current.memoizedProps，
-				//    找出差异，并更新 wip.stateNode (即真实DOM元素) 的属性。
-				//    如果属性有变化，也需要调用 markUpdate(wip) 来标记此 Fiber 需要在提交阶段更新。
-				//    (当前代码片段中这部分是空的)
+				// 处理 DOM 属性的更新。
+				updateFiberProps(wip.stateNode, newProps);
 			} else {
 				// 7. 挂载路径：如果是新节点
 				//    7a. 调用 hostConfig 中的 createInstance 函数，根据 wip.type (例如 "div")
 				//        创建一个真实的 DOM 元素实例。
-				const instance = createInstance(wip.type);
+				const instance = createInstance(wip.type, newProps);
 				//    7b. 调用 appendAllChildren 函数，将 wip 节点的所有子孙后代中
 				//        实际的 DOM 节点（或文本节点）附加到刚刚创建的 instance (父DOM元素) 上。
 				appendAllChildren(instance, wip);
@@ -68,7 +63,7 @@ export const completeWork = (wip: FiberNode) => {
 			if (current !== null && wip.stateNode) {
 				// 12. 更新路径：
 				//     12a. 获取旧的文本内容。
-				const oldText = current.memoizedProps.content;
+				const oldText = current.memoizedProps?.content;
 				//     12b. 获取新的文本内容。
 				const newText = newProps.content;
 				//     12c. 如果文本内容发生了变化，就调用 markUpdate 标记该 Fiber 节点，
@@ -171,7 +166,6 @@ function appendAllChildren(parent: Container, wip: FiberNode) {
 			}
 
 			// 12. node 指向其父 Fiber 节点，实现向上回溯。
-			//     node?.return 使用可选链以防 return 意外为 null。
 			node = node?.return;
 		}
 

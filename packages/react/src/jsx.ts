@@ -9,7 +9,6 @@ import {
 } from 'shared/ReactTypes';
 
 // ReactElement
-
 const ReactElement = function (
 	type: Type,
 	key: Key,

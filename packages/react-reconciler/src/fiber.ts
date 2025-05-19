@@ -37,18 +37,15 @@ export class FiberNode {
 		// 对于宿主根节点 (Host Root) Fiber 节点, stateNode 指向的是 FiberRoot 对象
 		// 对于宿主文本节点 (Host Text) Fiber 节点, stateNode 指向的是该文本对应的真实 DOM 文本节点 (Text Node)
 		this.stateNode = null;
-		//对于类组件 (Class Component) Fiber 节点：
-		// type 指向的是该类组件的构造函数 (constructor) 本身。例如，如果你定义了一个组件 class MyComponent extends React.Component {...}，那么代表 <MyComponent /> 的 Fiber 节点的 type 就是 MyComponent 这个类。
 
+		// 对于类组件 (Class Component) Fiber 节点：
+		// type 指向的是该类组件的构造函数 (constructor) 本身。例如，如果你定义了一个组件 class MyComponent extends React.Component {...}，那么代表 <MyComponent /> 的 Fiber 节点的 type 就是 MyComponent 这个类。
 		// 对于函数组件 (Function Component) Fiber 节点：
 		// type 指向的是该函数组件本身。例如，如果你定义了一个组件 function MyFunctionComponent() {...} 或者 const MyFunctionComponent = () => {...}，那么代表 <MyFunctionComponent /> 的 Fiber 节点的 type 就是 MyFunctionComponent 这个函数。
-
 		// 对于宿主组件 (Host Component) Fiber 节点 (例如 <div>, <span>, <p> 等原生 DOM 元素)：
 		// type 是一个字符串，表示该 DOM 元素的标签名。例如，对于一个 <div> 元素，其 Fiber 节点的 type 就是字符串 "div"。
-
 		// 对于原生 React 元素，如 Fragment、Profiler、StrictMode、Suspense、ContextProvider、ContextConsumer 等：
 		// type 通常是 React 内部定义的特殊 Symbol 值或者对象，用来标识这些特定的 React 结构。例如，Fragment 的 type 是 REACT_FRAGMENT_TYPE 这个 Symbol。
-
 		// 对于宿主文本节点 (Host Text) Fiber 节点：
 		// 文本节点没有 type 属性，因为它们的内容直接存储在 pendingProps (或 memoizedProps) 中。通常，React 会根据父组件的 children 来创建文本节点。
 		this.type = null;
