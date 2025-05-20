@@ -79,3 +79,14 @@ export function removeChild(
 ) {
 	container.removeChild(child);
 }
+
+/**
+ * @description 将一个指定的子 DOM 节点插入到父 DOM 容器中，并放在另一个指定的子 DOM 节点的前面
+ */
+export function insertChildToContainer(
+	child: Instance,
+	container: Container,
+	before: Instance
+) {
+	container.insertBefore(child, before); // 调用浏览器原生的 insertBefore 方法
+}

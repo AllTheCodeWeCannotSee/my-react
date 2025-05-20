@@ -2,6 +2,8 @@ import {
 	appendChildToContainer,
 	commitUpdate,
 	Container,
+	insertChildToContainer,
+	Instance,
 	removeChild
 } from 'hostConfig';
 import { FiberNode, FiberRootNode } from './fiber';
@@ -255,11 +257,72 @@ const commitPlacement = (finishedWork: FiberNode) => {
 	}
 	// parent DOM
 	const hostParent = getHostParent(finishedWork);
+
+	// host sibling
+	const sibling = getHostSibling(finishedWork);
+
 	// finishedWork ~~ DOM append parent DOM
 	if (hostParent !== null) {
-		appendPlacementNodeIntoContainer(finishedWork, hostParent);
+		insertOrAppendPlacementNodeIntoContainer(finishedWork, hostParent, sibling);
 	}
 };
+
+/**
+ * @description 找到一个给定的 Fiber 节点在 DOM 结构中的下一个真实的兄弟 DOM 节点
+ * @param fiber
+ * @returns
+ */
+function getHostSibling(fiber: FiberNode) {
+	let node: FiberNode = fiber; // 游标
+
+	findSibling: while (true) {
+		// 向上查找，直到找到一个有兄弟节点的祖先，或者到达一个宿主类型的父节点或根节点
+		while (node.sibling === null) {
+			const parent = node.return;
+
+			if (
+				parent === null ||
+				parent.tag === HostComponent ||
+				parent.tag === HostRoot
+			) {
+				return null;
+			}
+			node = parent;
+		}
+
+		// 当跳出上面的内部 while 循环时，说明当前的 `node` 有一个 `sibling`
+		node.sibling.return = node.return;
+
+		// // 将游标 `node` 移动到这个兄弟节点
+		node = node.sibling;
+
+		// 向下查找，从这个兄弟节点开始，向下查找第一个实际的 DOM 节点
+		while (node.tag !== HostText && node.tag !== HostComponent) {
+			// 说明直接 sibling 不是一个 Host 类型
+			if ((node.flags & Placement) !== NoFlags) {
+				// 不稳定，继续找
+				continue findSibling;
+			}
+			if (node.child === null) {
+				continue findSibling;
+			} else {
+				node.child.return = node;
+				node = node.child;
+			}
+		}
+
+		// 当跳出上面的内部 while 循环时，`node` 应该是一个 HostComponent 或 HostText 类型的 Fiber 节点
+		//    如果它没有 Placement 标记，说明它是一个已经存在于 DOM 中的稳定节点，
+		//    这就是我们要找的 DOM 兄弟节点，返回它的 `stateNode` (即真实的 DOM 元素或文本节点)。
+		if ((node.flags & Placement) === NoFlags) {
+			return node.stateNode;
+		}
+		// 如果这个找到的宿主节点本身也有 Placement 标记，说明它也是新插入的（不稳定的Host节点），
+		// 不能作为插入 `fiber` 时的 `before` 参照物。
+		// 此时，循环会回到 `findSibling` 的开头，继续尝试从 `node` (当前这个带 Placement 的宿主节点)
+		// 的兄弟节点开始查找，或者从其父节点的兄弟节点开始查找。
+	}
+}
 
 /**
  * @description 从给定的 Fiber 节点开始，向上遍历 Fiber 树，直到找到第一个可以直接作为 DOM 父容器的祖先节点
@@ -294,18 +357,19 @@ function getHostParent(fiber: FiberNode): Container | null {
  * @param hostParent 目标父 DOM 容器
  * @returns
  */
-function appendPlacementNodeIntoContainer(
+function insertOrAppendPlacementNodeIntoContainer(
 	finishedWork: FiberNode, // 参数 finishedWork：代表需要被“放置”到 DOM 中的 Fiber 节点
-	hostParent: Container // 参数 hostParent：这个 Fiber 节点应该被添加到的父级真实 DOM 容器
+	hostParent: Container, // 参数 hostParent：这个 Fiber 节点应该被添加到的父级真实 DOM 容器
+	before?: Instance
 ) {
 	// 1. 检查 finishedWork 是否是直接可以渲染到 DOM 的类型
 	//    即宿主组件 (HostComponent，如 <div>) 或宿主文本节点 (HostText)
 	if (finishedWork.tag === HostComponent || finishedWork.tag === HostText) {
-		// 2. 如果是，说明 finishedWork.stateNode 就是一个真实的 DOM 元素或文本节点。
-		//    直接调用 appendChildToContainer (来自 hostConfig)，
-		//    将这个真实的 DOM 节点 (finishedWork.stateNode) 添加到 hostParent 容器中。
-		appendChildToContainer(hostParent, finishedWork.stateNode);
-		// 3. 添加完毕后，直接返回，不再处理其子节点 (因为这个节点本身就是被放置的实体)。
+		if (before) {
+			insertChildToContainer(finishedWork.stateNode, hostParent, before);
+		} else {
+			appendChildToContainer(hostParent, finishedWork.stateNode);
+		}
 		return;
 	}
 
@@ -319,7 +383,7 @@ function appendPlacementNodeIntoContainer(
 		// 6. 递归调用 appendPlacementNodeIntoContainer，
 		//    尝试将第一个子节点 (child) 放置到同一个 hostParent 中。
 		//    这是因为如果父节点 (finishedWork) 是一个组件，那么它的子节点才是实际要渲染的内容。
-		appendPlacementNodeIntoContainer(child, hostParent);
+		insertOrAppendPlacementNodeIntoContainer(child, hostParent);
 
 		// 7. 处理第一个子节点之后，还需要处理它的所有兄弟节点。
 		//    获取第一个子节点的兄弟节点。
@@ -329,7 +393,7 @@ function appendPlacementNodeIntoContainer(
 		while (sibling !== null) {
 			// 9. 对每个兄弟节点，同样递归调用 appendPlacementNodeIntoContainer，
 			//    将它们也放置到同一个 hostParent 中。
-			appendPlacementNodeIntoContainer(sibling, hostParent);
+			insertOrAppendPlacementNodeIntoContainer(sibling, hostParent);
 			// 10. 移动到下一个兄弟节点
 			sibling = sibling.sibling;
 		}

@@ -90,8 +90,14 @@ export class FiberRootNode {
  *
  * @description 负责创建或复用一个与 current Fiber 节点相对应的 wip Fiber 节点
  * @param current current node，来自当前已渲染树的 FiberNode
- * @param pendingProps 这个 Fiber 应该处理的新 props
- * @returns {FiberNode} 返回wip fibernode
+ * @param pendingProps 新 props
+ * @returns {FiberNode}
+ * * 类型：wip fibernode
+ * * 结构：
+ * 	* 实例(tag, key, stateNode, type)：赋值，数据来自 current
+ * 	* 树状结构（return, sibling, child, index）：null
+ * 	* 工作单元(pendingProps, memoizedProps, memoizedState, updateQueue, alternate)：赋值，数据来自 current & pendingProps
+ * 	* 副作用(flags, subtreeFlags, deletions)：重置
  */
 export const createWorkInProgress = (
 	current: FiberNode,
@@ -128,6 +134,11 @@ export const createWorkInProgress = (
 	return wip;
 };
 
+/**
+ * @description 根据一个 React Element 创建一个新的 FiberNode 实例。
+ * @param element
+ * @returns
+ */
 export function createFiberFromElement(element: ReactElementType): FiberNode {
 	const { type, key, props } = element;
 	let fiberTag: WorkTag = FunctionComponent;

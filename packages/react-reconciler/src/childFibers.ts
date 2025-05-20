@@ -8,6 +8,8 @@ import {
 import { ChildDeletion, Placement } from './fiberFlags';
 import { HostText } from './workTags';
 
+type ExistingChildren = Map<string | number, FiberNode>;
+
 /**
  * @description 这是一个工厂函数。它本身不直接进行协调工作，而是返回一个执行协调工作的函数。
  * @param {boolean} shouldTrackEffects
@@ -16,37 +18,52 @@ import { HostText } from './workTags';
  */
 function ChildReconciler(shouldTrackEffects: boolean) {
 	/**
-	 * @description 当一个子 Fiber 节点需要被标记为删除时，会调用这个函数。
+	 * @description 将一个 fiber 子节点标记为删除
 	 * @param returnFiber - 使用 reconcileChildFibers 作用域的 returnFiber， wip的父节点
 	 * @param childToDelete  - 使用 reconcileChildFibers 作用域的 currentFiber， current tree对应的的子节点
 	 * @see {@link reconcileChildFibers}
 	 * @returns
 	 */
 	function deleteChild(returnFiber: FiberNode, childToDelete: FiberNode) {
-		// 如果 shouldTrackEffects 为 false
-		// 它什么也不做（如果不在追踪副作用，就没必要追踪删除，例如在初始挂载时，没有旧东西可删）。
+		// 如果不在追踪副作用，就没必要追踪删除，例如在初始挂载时，没有旧东西可删
 		if (!shouldTrackEffects) {
 			return;
 		}
 
-		// 否则，它会将 childToDelete 添加到 returnFiber.deletions 数组中。returnFiber 是父 Fiber。
 		const deletions = returnFiber.deletions;
 		if (deletions === null) {
 			returnFiber.deletions = [childToDelete];
-
-			// 在 returnFiber.flags 上设置一个 ChildDeletion 标记。
-			// 这告诉 React，这个父节点有一些子节点需要在稍后的“提交阶段”（commit phase）从实际 DOM 中移除。
 			returnFiber.flags |= ChildDeletion;
 		} else {
 			deletions.push(childToDelete);
 		}
 	}
+	/**
+	 * @description 在组件更新时，遍历并标记从某个旧的子 Fiber 节点开始的所有后续兄弟节点，以便在提交阶段将它们从 DOM 中移除
+	 * @param returnFiber work-in-progress 树中的父节点
+	 * @param currentFirstChild current tree 中，需要开始删除的第一个子 Fiber 节点
+	 */
+	function deleteRemainingChildren(
+		returnFiber: FiberNode,
+		currentFirstChild: FiberNode | null
+	) {
+		// 在挂载阶段没有旧节点需要删除，所以如果 `shouldTrackEffects` 为 `false`，函数直接返回，不做任何操作
+		if (!shouldTrackEffects) {
+			return;
+		}
+		// 游标
+		let childToDelete = currentFirstChild;
+		while (childToDelete !== null) {
+			deleteChild(returnFiber, childToDelete);
+			childToDelete = childToDelete.sibling;
+		}
+	}
 
 	/**
-	 * @description 这个函数处理 newChild 是单个 React 元素（例如 <div></div> 或 <MyComponent />）的情况。
-	 * @param returnFiber 使用 reconcileChildFibers 作用域的 returnFiber， wip的父节点
-	 * @param currentFiber 使用 reconcileChildFibers 作用域的 currentFiber， current tree对应的的子节点
-	 * @param element 使用 reconcileChildFibers 作用域的 newChild，子节点 的 ReactElement
+	 * @description 这个函数处理 newChild 是单个 React 元素（例如 `<div></div>` 或 `<MyComponent />`）的情况。
+	 * @param returnFiber wip的父节点
+	 * @param currentFiber current tree对应的的子节点
+	 * @param element 子节点 的 ReactElement
 	 * @returns
 	 */
 	function reconcileSingleElement(
@@ -55,7 +72,7 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 		element: ReactElementType
 	) {
 		const key = element.key;
-		work: if (currentFiber !== null) {
+		while (currentFiber !== null) {
 			// update
 			if (currentFiber.key === key) {
 				// key相同
@@ -64,21 +81,23 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 						// type相同
 						const existing = useFiber(currentFiber, element.props);
 						existing.return = returnFiber;
+						// 当前节点可复用，标记剩下的节点删除
+						deleteRemainingChildren(returnFiber, currentFiber.sibling);
 						return existing;
 					}
-
-					// 删掉旧的
-					deleteChild(returnFiber, currentFiber);
-					break work;
+					// key相同，type不同 删掉所有旧的
+					deleteRemainingChildren(returnFiber, currentFiber);
+					break;
 				} else {
 					if (__DEV__) {
 						console.warn('还未实现的react类型', element);
-						break work;
+						break;
 					}
 				}
 			} else {
-				// 删掉旧的
+				// key不同，删掉旧的
 				deleteChild(returnFiber, currentFiber);
+				currentFiber = currentFiber.sibling;
 			}
 		}
 		// 根据element创建fiber
@@ -100,7 +119,7 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 		content: string | number
 	) {
 		// 1. 检查是否存在上一次渲染的 Fiber 节点 (currentFiber)
-		if (currentFiber !== null) {
+		while (currentFiber !== null) {
 			// 如果存在，说明是更新操作
 
 			// 2. 检查上一次的 Fiber 节点是否也是一个文本节点
@@ -108,25 +127,22 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 				// 类型没变，可以复用
 				const existing = useFiber(currentFiber, { content });
 				existing.return = returnFiber;
+				deleteRemainingChildren(returnFiber, currentFiber.sibling);
 				return existing;
 			}
-			// 如果 currentFiber 存在，但它的类型不是 HostText (例如，它之前是一个元素节点)，
-			// 那么节点类型发生了变化，我们不能复用它来表示文本。
-			// 调用 deleteChild 将 currentFiber 标记为删除 (从 DOM 中移除)
+			// 如果 currentFiber 存在，但它的类型不是 HostText
 			deleteChild(returnFiber, currentFiber);
+			currentFiber = currentFiber.sibling;
 		}
 
-		// 3. 创建新的文本 Fiber 节点
-		// 如果之前没有对应的 Fiber 节点 (currentFiber === null)，
-		// 或者之前的节点类型不同且已被删除，则执行此部分。
-		// 创建一个新的 FiberNode 来代表这个文本。
+		// 3. 没有对应的 Fiber 节点，创建新的文本 Fiber 节点
 		const fiber = new FiberNode(HostText, { content }, null);
 		fiber.return = returnFiber;
 		return fiber;
 	}
 
 	/**
-	 * @description 如果首屏渲染 & 应该追踪副作用的情况下，进行标记
+	 * @description 是否是新创建的节点（且在更新阶段）来打上 Placement 标记。
 	 * @param fiber wip-fiber-node
 	 */
 	function placeSingleChild(fiber: FiberNode) {
@@ -134,6 +150,130 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 			fiber.flags |= Placement;
 		}
 		return fiber;
+	}
+	/**
+	 *
+	 * @param returnFiber
+	 * @param currentFirstChild
+	 * @param newChild 存放 ReactElement 的数组
+	 * @returns
+	 */
+	function reconcileChildrenArray(
+		returnFiber: FiberNode,
+		currentFirstChild: FiberNode | null,
+		newChild: any[]
+	) {
+		// 最后一个可复用fiber在current中的index
+		let lastPlacedIndex: number = 0;
+		// 创建的最后一个fiber
+		let lastNewFiber: FiberNode | null = null;
+		// 创建的第一个fiber
+		let firstNewFiber: FiberNode | null = null;
+
+		// 1.将current保存在map中
+		const existingChildren: ExistingChildren = new Map();
+		let current = currentFirstChild;
+		while (current !== null) {
+			const keyToUse = current.key !== null ? current.key : current.index;
+			existingChildren.set(keyToUse, current);
+			current = current.sibling;
+		}
+
+		for (let i = 0; i < newChild.length; i++) {
+			// 2.遍历newChild，寻找是否可复用
+			const after = newChild[i];
+			const newFiber = updateFromMap(returnFiber, existingChildren, i, after);
+
+			if (newFiber === null) {
+				continue;
+			}
+
+			// 3. 标记移动还是插入
+			newFiber.index = i;
+			newFiber.return = returnFiber;
+
+			if (lastNewFiber === null) {
+				lastNewFiber = newFiber;
+				firstNewFiber = newFiber;
+			} else {
+				lastNewFiber.sibling = newFiber;
+				lastNewFiber = lastNewFiber.sibling;
+			}
+
+			if (!shouldTrackEffects) {
+				continue;
+			}
+
+			const current = newFiber.alternate;
+			if (current !== null) {
+				const oldIndex = current.index;
+				if (oldIndex < lastPlacedIndex) {
+					// 移动
+					newFiber.flags |= Placement;
+					continue;
+				} else {
+					// 不移动
+					lastPlacedIndex = oldIndex;
+				}
+			} else {
+				// mount
+				newFiber.flags |= Placement;
+			}
+		}
+		// 4. 将Map中剩下的标记为删除
+		existingChildren.forEach((fiber) => {
+			deleteChild(returnFiber, fiber);
+		});
+		return firstNewFiber;
+	}
+
+	/**
+	 * @description 尝试从旧节点中找出可复用的，基于此创建 wip 节点
+	 * @param returnFiber 父节点
+	 * @param existingChildren Map，存储旧节点，[key, fiberNode]
+	 * @param index 当前新子元素在 newChild 数组的索引
+	 * @param element 新子元素
+	 * @returns
+	 */
+	function updateFromMap(
+		returnFiber: FiberNode,
+		existingChildren: ExistingChildren,
+		index: number,
+		element: any
+	): FiberNode | null {
+		const keyToUse = element.key !== null ? element.key : index;
+		const before = existingChildren.get(keyToUse);
+
+		// HostText
+		if (typeof element === 'string' || typeof element === 'number') {
+			if (before) {
+				if (before.tag === HostText) {
+					existingChildren.delete(keyToUse);
+					return useFiber(before, { content: element + '' });
+				}
+			}
+			return new FiberNode(HostText, { content: element + '' }, null);
+		}
+
+		// ReactElement
+		if (typeof element === 'object' && element !== null) {
+			switch (element.$$typeof) {
+				case REACT_ELEMENT_TYPE:
+					if (before) {
+						if (before.type === element.type) {
+							existingChildren.delete(keyToUse);
+							return useFiber(before, element.props);
+						}
+					}
+					return createFiberFromElement(element);
+			}
+
+			// TODO 数组类型
+			if (Array.isArray(element) && __DEV__) {
+				console.warn('还未实现数组类型的child');
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -159,8 +299,11 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 					}
 					break;
 			}
+			// 多节点的情况 ul> li*3
+			if (Array.isArray(newChild)) {
+				return reconcileChildrenArray(returnFiber, currentFiber, newChild);
+			}
 		}
-		// TODO 多节点的情况 ul> li*3
 
 		// HostText
 		if (typeof newChild === 'string' || typeof newChild === 'number') {
@@ -181,10 +324,17 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 }
 
 /**
- * @description 一个辅助函数，用于在复用现有 fiber 时为其创建一个 wip 的副本。
- * @param fiber 使用 reconcileChildFibers 作用域的 currentFiber， current tree对应的的子节点
+ * @description -
+ * * 作用：基于这个旧节点和新的 props 创建一个对应的 wip fiber node 的副本
+ * * 流程：1. 通过 `createWorkInProgress()` 制作出新节点 2. 添加树状结构
+ * @param fiber
  * @param pendingProps
  * @returns
+ * * 副本的结构
+ * 	* 实例: 赋值, 来自于传入的 fiber
+ * 	* 树形结构: 赋值,index = 0, sibling = null
+ * 	* 工作单元: 赋值，数据来自 `fiber & pendingProps`
+ * 	* 副作用: 重置
  */
 function useFiber(fiber: FiberNode, pendingProps: Props): FiberNode {
 	const clone = createWorkInProgress(fiber, pendingProps);
