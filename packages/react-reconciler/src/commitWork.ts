@@ -90,7 +90,7 @@ export const commitMutationEffects = (finishedWork: FiberNode) => {
 };
 
 /**
- * @description 这个函数是针对单个 Fiber 节点来执行其身上标记的“变更类”副作用（Mutation Effects）。“变更类”副作用指的是那些会直接修改 DOM 结构的操作，比如插入新节点、更新现有节点、删除节点。
+ * @description 针对单个 Fiber 节点来执行其身上标记的“变更类”副作用（Mutation Effects）。“变更类”副作用指的是那些会直接修改 DOM 结构的操作，比如插入新节点、更新现有节点、删除节点。
  * @param finishedWork 当前有flags的节点
  */
 const commitMutaitonEffectsOnFiber = (finishedWork: FiberNode) => {
@@ -131,6 +131,33 @@ const commitMutaitonEffectsOnFiber = (finishedWork: FiberNode) => {
 };
 
 /**
+ * @description 收集一个列表，这个列表包含了那些互为兄弟节点、并且是需要从它们共同的 DOM 父节点中被显式移除的直接 Host 子 Fiber 节点
+ * @param childrenToDelete 一个数组（从 commitDeletion 通过引用传递过来），用于累积需要删除的宿主 Fiber 节点
+ * @param unmountFiber
+ */
+function recordHostChildrenToDelete(
+	childrenToDelete: FiberNode[],
+	unmountFiber: FiberNode
+) {
+	// 1. 找到第一个root host节点
+	const lastOne = childrenToDelete[childrenToDelete.length - 1];
+
+	if (!lastOne) {
+		childrenToDelete.push(unmountFiber);
+	} else {
+		let node = lastOne.sibling;
+		while (node !== null) {
+			if (unmountFiber === node) {
+				childrenToDelete.push(unmountFiber);
+			}
+			node = node.sibling;
+		}
+	}
+
+	// 2. 每找到一个 host节点，判断下这个节点是不是 1 找到那个节点的兄弟节点
+}
+
+/**
  * @description 这个函数负责完整地卸载一个 Fiber 节点 (childToDelete) 及其整个子树
  * * 执行清理逻辑
  * * 从 DOM 中移除
@@ -138,26 +165,17 @@ const commitMutaitonEffectsOnFiber = (finishedWork: FiberNode) => {
  * @param childToDelete
  */
 function commitDeletion(childToDelete: FiberNode) {
-	// 1. 初始化一个变量 rootHostNode，用于存储在 childToDelete 子树中找到的
-	//    第一个可以直接被移除的 DOM 节点 (HostComponent 或 HostText)。
-	//    这个节点将是实际从父 DOM 中移除的那个节点。
-	let rootHostNode: FiberNode | null = null;
+	const rootChildrenToDelete: FiberNode[] = [];
 
 	// 递归子树
 	commitNestedComponent(childToDelete, (unmountFiber) => {
 		switch (unmountFiber.tag) {
 			case HostComponent: // 如果是宿主组件 (如 <div>)
-				// 4. 如果 rootHostNode 还没有被赋值，说明这是我们在此子树中遇到的
-				//    第一个宿主组件，它将是最终被从 DOM 中移除的根 DOM 节点。
-				if (rootHostNode === null) {
-					rootHostNode = unmountFiber;
-				}
+				recordHostChildrenToDelete(rootChildrenToDelete, unmountFiber);
 				// TODO 解绑ref
 				return;
 			case HostText: // 如果是宿主文本节点
-				if (rootHostNode === null) {
-					rootHostNode = unmountFiber;
-				}
+				recordHostChildrenToDelete(rootChildrenToDelete, unmountFiber);
 				return;
 			case FunctionComponent: // 如果是函数组件
 				// TODO useEffect unmount 、解绑ref
@@ -172,11 +190,12 @@ function commitDeletion(childToDelete: FiberNode) {
 	// 5. 当 commitNestedComponent 执行完毕后，childToDelete 子树中所有节点的
 	//    卸载前清理逻辑 (如 componentWillUnmount, useEffect 清理) 应该已经执行。
 	//    现在，实际从 DOM 中移除节点。
-	//    检查是否找到了一个 rootHostNode (即子树中实际的根 DOM 节点)。
-	if (rootHostNode !== null) {
+	if (rootChildrenToDelete.length) {
 		const hostParent = getHostParent(childToDelete);
 		if (hostParent !== null) {
-			removeChild((rootHostNode as FiberNode).stateNode, hostParent);
+			rootChildrenToDelete.forEach((node) => {
+				removeChild(node.stateNode, hostParent);
+			});
 		}
 	}
 	childToDelete.return = null;

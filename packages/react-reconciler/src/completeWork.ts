@@ -10,7 +10,8 @@ import {
 	HostRoot,
 	HostText,
 	HostComponent,
-	FunctionComponent
+	FunctionComponent,
+	Fragment
 } from './workTags';
 import { updateFiberProps } from 'react-dom/src/SyntheticEvent';
 
@@ -84,20 +85,10 @@ export const completeWork = (wip: FiberNode) => {
 			// 15. 返回 null
 			return null;
 
-		// 16. 如果是 Fiber 树的根节点 (HostRoot)
 		case HostRoot:
-			// 17. 对于根节点，completeWork 主要也是进行属性冒泡。
-			bubbleProperties(wip);
-			// 18. 返回 null
-			return null;
-
-		// 19. 如果是函数组件 (FunctionComponent)
 		case FunctionComponent:
-			// 20. 函数组件本身不直接对应 DOM 节点。它们的主要工作
-			//     (执行函数本身并返回子元素) 是在 beginWork 阶段完成的。
-			//     在 completeWork 阶段，对于函数组件，主要也是进行属性冒泡。
+		case Fragment:
 			bubbleProperties(wip);
-			// 21. 返回 null
 			return null;
 
 		// 22. 如果遇到未处理的 Fiber 类型
