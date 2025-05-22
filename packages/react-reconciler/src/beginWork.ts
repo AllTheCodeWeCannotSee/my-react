@@ -56,7 +56,7 @@ function updateFunctionComponent(wip: FiberNode) {
 }
 
 /**
- * @description 处理 Host Root 类型的 Fiber 节点
+ * @description 处理整个应用的根节点（即HostRoot Fiber）的更新队列
  * @param wip 父节点
  * @returns 返回协调后产生的第一个子 Fiber 节点
  */
@@ -65,6 +65,7 @@ function updateHostRoot(wip: FiberNode) {
 	const updateQueue = wip.updateQueue as UpdateQueue<Element>;
 	const pending = updateQueue.shared.pending;
 	updateQueue.shared.pending = null;
+
 	// memoizedState：当前的hostRoot的最新的状态
 	const { memoizedState } = processUpdateQueue(baseState, pending);
 	wip.memoizedState = memoizedState;

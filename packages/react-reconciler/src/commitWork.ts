@@ -24,7 +24,7 @@ import {
 let nextEffect: FiberNode | null = null;
 
 /**
- * @description 是 React “commit阶段”中负责遍历 Fiber 树并执行所有“变更类”副作用（Mutation Effects）的主调度函数
+ * @description 遍历这棵 finishedWork Fiber 树，并执行所有与 DOM 结构变更相关的副作用
  * * Placement (插入)：将新的 DOM 节点添加到页面上。
  * * Update (更新)：修改现有 DOM 节点的属性或文本内容。
  * * ChildDeletion (子节点删除)：从 DOM 中移除不再需要的节点

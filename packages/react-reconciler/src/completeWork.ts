@@ -25,7 +25,9 @@ function markUpdate(fiber: FiberNode) {
 }
 
 /**
- * @description completeWork 函数在 React 的协调（或渲染）阶段，当一个 Fiber 节点（wip）的所有子节点都已经被处理完毕后被调用
+ * @description -
+ * * 创建/更新 DOM 实例
+ * * 副作用标记冒泡
  * @param wip
  * @returns
  */
@@ -35,7 +37,6 @@ export const completeWork = (wip: FiberNode) => {
 	const current = wip.alternate;
 
 	switch (wip.tag) {
-		// 4. 如果是宿主组件 (HostComponent)，例如 <div>, <p> 等HTML元素
 		case HostComponent:
 			// 5. 检查是否是更新过程 (current 存在) 并且真实 DOM 元素已创建 (wip.stateNode 存在)
 			if (current !== null && wip.stateNode) {
