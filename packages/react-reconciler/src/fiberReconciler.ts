@@ -9,6 +9,7 @@ import {
 } from './updateQueue';
 import { scheduleUpdateOnFiber } from './workLoop';
 import { HostRoot } from './workTags';
+import { requestUpdateLane } from './fiberLanes';
 
 /**
  * @description 创建 React 应用的根容器结构。
@@ -37,12 +38,13 @@ export function updateContainer(
 	root: FiberRootNode
 ) {
 	const hostRootFiber = root.current;
+	const lane = requestUpdateLane();
 	// element: 对应reactDOM.createRoot(root).render(<App />)中的<App />
-	const update = createUpdate<ReactElementType | null>(element);
+	const update = createUpdate<ReactElementType | null>(element, lane);
 	enqueueUpdate(
 		hostRootFiber.updateQueue as UpdateQueue<ReactElementType | null>,
 		update
 	);
-	scheduleUpdateOnFiber(hostRootFiber);
+	scheduleUpdateOnFiber(hostRootFiber, lane);
 	return element;
 }

@@ -10,18 +10,26 @@ import {
 } from './workTags';
 import { mountChildFibers, reconcileChildFibers } from './childFibers';
 import { renderWithHooks } from './fiberHooks';
+import { Lane } from './fiberLanes';
 
-// 递归中的递阶段
-export const beginWork = (wip: FiberNode) => {
+// 递归中的递阶段 (这个注释准确地描述了 beginWork 的角色)
+/**
+ * @description "递"阶段的入口函数。根据 Fiber 节点的类型，
+ *              执行相应的更新逻辑，协调其子节点，并返回下一个要处理的 Fiber 节点。
+ * @param wip 当前正在处理的 work-in-progress Fiber 节点。
+ * @param renderLane 当前渲染的优先级。
+ * @returns 返回下一个要处理的 Fiber 节点 (通常是 wip 的第一个子节点)，或者 null。
+ */
+export const beginWork = (wip: FiberNode, renderLane: Lane) => {
 	switch (wip.tag) {
 		case HostRoot:
-			return updateHostRoot(wip);
+			return updateHostRoot(wip, renderLane);
 		case HostComponent:
 			return updateHostComponent(wip);
 		case HostText:
 			return null;
 		case FunctionComponent:
-			return updateFunctionComponent(wip);
+			return updateFunctionComponent(wip, renderLane);
 		case Fragment:
 			return updateFragment(wip);
 		default:
@@ -49,8 +57,8 @@ function updateFragment(wip: FiberNode) {
  * @param wip 父节点
  * @returns 返回协调后产生的第一个子 Fiber 节点
  */
-function updateFunctionComponent(wip: FiberNode) {
-	const nextChildren = renderWithHooks(wip);
+function updateFunctionComponent(wip: FiberNode, renderLane: Lane) {
+	const nextChildren = renderWithHooks(wip, renderLane);
 	reconcileChildren(wip, nextChildren);
 	return wip.child;
 }
@@ -60,14 +68,14 @@ function updateFunctionComponent(wip: FiberNode) {
  * @param wip 父节点
  * @returns 返回协调后产生的第一个子 Fiber 节点
  */
-function updateHostRoot(wip: FiberNode) {
+function updateHostRoot(wip: FiberNode, renderLane: Lane) {
 	const baseState = wip.memoizedState;
 	const updateQueue = wip.updateQueue as UpdateQueue<Element>;
 	const pending = updateQueue.shared.pending;
 	updateQueue.shared.pending = null;
 
 	// memoizedState：当前的hostRoot的最新的状态
-	const { memoizedState } = processUpdateQueue(baseState, pending);
+	const { memoizedState } = processUpdateQueue(baseState, pending, renderLane);
 	wip.memoizedState = memoizedState;
 	// nextChildren: 子节点的reactElement
 	const nextChildren = wip.memoizedState;

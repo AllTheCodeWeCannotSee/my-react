@@ -1,3 +1,9 @@
+// 提供一套针对浏览器 DOM 环境的低级 API 实现，
+// 使得平台无关的 React 协调器能够执行真实的 UI 创建、更新和删除操作
+
+// 协调器（react-reconciler）知道 需要 创建一个 DOM 元素、更新一个属性、插入一个子节点或删除一个节点，
+// 但它不知道 如何 在浏览器中具体执行这些操作。这些具体的实现细节就由 hostConfig.ts 来提供。
+
 import { FiberNode } from 'react-reconciler/src/fiber';
 import { HostText } from 'react-reconciler/src/workTags';
 import { Props } from 'shared/ReactTypes';
@@ -90,3 +96,14 @@ export function insertChildToContainer(
 ) {
 	container.insertBefore(child, before); // 调用浏览器原生的 insertBefore 方法
 }
+
+/**
+ * @param scheduleMicroTask 提供一个跨浏览器/环境兼容的方式来调度一个函数（回调函数）作为微任务（microtask）执行
+ */
+export const scheduleMicroTask =
+	typeof queueMicrotask === 'function'
+		? queueMicrotask
+		: typeof Promise === 'function'
+			? (callback: (...args: any) => void) =>
+					Promise.resolve(null).then(callback)
+			: setTimeout;

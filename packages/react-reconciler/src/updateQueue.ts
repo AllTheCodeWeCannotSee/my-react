@@ -1,11 +1,14 @@
 import { Dispatch } from 'react/src/currentDispatcher';
 import { Action } from 'shared/ReactTypes';
+import { Lane } from './fiberLanes';
 
 /**
  * @description 一个 Update 对象就代表了一次具体的“更新意图”，这个意图通过它的 action 属性来表达
  */
 export interface Update<State> {
 	action: Action<State>;
+	lane: Lane;
+	next: Update<any> | null;
 }
 
 export interface UpdateQueue<State> {
@@ -18,9 +21,14 @@ export interface UpdateQueue<State> {
 /**
  * @description 一个创建 Update 对象的工厂函数
  */
-export const createUpdate = <State>(action: Action<State>): Update<State> => {
+export const createUpdate = <State>(
+	action: Action<State>,
+	lane: Lane
+): Update<State> => {
 	return {
-		action
+		action,
+		lane,
+		next: null
 	};
 };
 
@@ -45,35 +53,62 @@ export const enqueueUpdate = <State>(
 	updateQueue: UpdateQueue<State>,
 	update: Update<State>
 ) => {
+	// `pending` 指向的是当前队列中最后一个更新。
+	const pending = updateQueue.shared.pending;
+
+	// 构建单向循环链表
+	if (pending === null) {
+		// pending = a -> a
+		update.next = update;
+	} else {
+		// pending = b -> a -> b
+		// pending = c -> a -> b -> c
+		update.next = pending.next;
+		pending.next = update;
+	}
+
 	updateQueue.shared.pending = update;
 };
 
 /**
- * @description 这是处理更新队列中更新的核心函数，它计算并返回新的状态
+ * @description 计算并返回新的状态
  * @param baseState 进行更新计算前的基础状态（当前状态）
  * @param pendingUpdate 等待处理的更新对象，如果队列为空，则为 null
+ * @param renderLane
  * @returns 函数返回一个对象，这个对象有一个 memoizedState 属性，代表应用更新后得到的新状态
  */
 export const processUpdateQueue = <State>(
 	baseState: State,
-	pendingUpdate: Update<State> | null
+	pendingUpdate: Update<State> | null,
+	renderLane: Lane
 ): { memoizedState: State } => {
 	const result: ReturnType<typeof processUpdateQueue<State>> = {
 		memoizedState: baseState
 	};
 
 	if (pendingUpdate !== null) {
-		const action = pendingUpdate.action;
-		// 如果 action 是一个函数
-		if (action instanceof Function) {
-			// 例如：基础状态是 1，action 是 (x) => 4*x，那么新状态就是 4
-			result.memoizedState = action(baseState);
-			// 如果 action 是一个直接的值
-		} else {
-			// 例如：基础状态是 1，action 是 2，那么新状态就是 2
-			result.memoizedState = action;
-		}
+		// 第一个update
+		const first = pendingUpdate.next;
+		let pending = pendingUpdate.next as Update<any>;
+		do {
+			const updateLane = pending.lane;
+			if (updateLane === renderLane) {
+				const action = pending.action;
+				if (action instanceof Function) {
+					// baseState 1 update (x) => 4x -> memoizedState 4
+					baseState = action(baseState);
+				} else {
+					// baseState 1 update 2 -> memoizedState 2
+					baseState = action;
+				}
+			} else {
+				if (__DEV__) {
+					console.error('不应该进入updateLane !== renderLane逻辑');
+				}
+			}
+			pending = pending.next as Update<any>;
+		} while (pending !== first);
 	}
-
+	result.memoizedState = baseState;
 	return result;
 };

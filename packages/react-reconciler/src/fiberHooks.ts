@@ -3,6 +3,7 @@ import { Dispatcher } from 'react/src/currentDispatcher';
 import internals from 'shared/internals';
 import { Action } from 'shared/ReactTypes';
 import { FiberNode } from './fiber';
+import { Lane, NoLane, requestUpdateLane } from './fiberLanes';
 import {
 	createUpdate,
 	createUpdateQueue,
@@ -17,6 +18,7 @@ let currentlyRenderingFiber: FiberNode | null = null;
 // 指向链表中当前正在处理的hook（fiberNode 中的 memoizedState 指向一个链表，链表的元素是Hooks（useState、useEffect...））
 let workInProgressHook: Hook | null = null;
 let currentHook: Hook | null = null;
+let renderLane: Lane = NoLane;
 
 const { currentDispatcher } = internals;
 
@@ -36,8 +38,9 @@ interface Hook {
 /**
  * @description 执行一个函数式组件 (Function Component) 并获取它渲染出来的内容
  * @param wip 是 FunctionComponent 类型的fibernode
+ * @return 返回函数组件执行后产生的子 React 元素 (children)
  */
-export function renderWithHooks(wip: FiberNode) {
+export function renderWithHooks(wip: FiberNode, lane: Lane) {
 	// 赋值操作
 
 	// 目的：hook要知道自身数据保存在哪里
@@ -45,6 +48,7 @@ export function renderWithHooks(wip: FiberNode) {
 	currentlyRenderingFiber = wip;
 	// 重置 hooks链表
 	wip.memoizedState = null;
+	renderLane = lane;
 
 	const current = wip.alternate;
 
@@ -65,6 +69,7 @@ export function renderWithHooks(wip: FiberNode) {
 	currentlyRenderingFiber = null;
 	workInProgressHook = null;
 	currentHook = null;
+	renderLane = NoLane;
 	return children;
 }
 
@@ -95,7 +100,11 @@ function updateState<State>(): [State, Dispatch<State>] {
 	const pending = queue.shared.pending;
 
 	if (pending !== null) {
-		const { memoizedState } = processUpdateQueue(hook.memoizedState, pending);
+		const { memoizedState } = processUpdateQueue(
+			hook.memoizedState,
+			pending,
+			renderLane
+		);
 		hook.memoizedState = memoizedState;
 	}
 
@@ -189,18 +198,20 @@ function updateWorkInProgresHook(): Hook {
 	return workInProgressHook; // 返回新创建并链接好的 Hook 对象
 }
 
+/**
+ * @description useState Hook 在组件首次挂载时的实现。
+ * @param initialState 初始状态值，或者一个计算初始状态的函数。
+ * @returns 数组 [state, setState]
+ */
 function mountState<State>(
 	initialState: (() => State) | State // 初始状态值，或者一个计算初始状态的函数
 ): [State, Dispatch<State>] {
-	// 返回我们熟悉的 [state, setState] 这对组合
-
 	// 1. 获取或创建专属于这次 useState 调用的 Hook 对象。
 	//    `mountWorkInProgresHook` 函数会确保我们为这个组件的 Hook 链表
 	//    准备好一个“坑位”（一个 Hook 对象）。这个“坑位”会用来存放
 	//    *当前这次* useState 调用所需的状态和更新队列。
 	const hook = mountWorkInProgresHook();
 
-	// 2. 计算初始的 memoizedState (记忆化状态)。
 	let memoizedState;
 	if (initialState instanceof Function) {
 		// 如果 `initialState` 是一个函数 (比如 useState(() => computeExpensiveValue()))，
@@ -211,35 +222,22 @@ function mountState<State>(
 		memoizedState = initialState;
 	}
 
-	// 3. 为这个状态创建一个更新队列。
-	//    每一个由 useState 管理的状态都需要有它自己的队列来存放待处理的更新。
 	const queue = createUpdateQueue<State>();
-
-	// 4. 把更新队列和初始状态存放到 Hook 对象上。
-	//    现在，我们为这次 useState 准备的 `hook`“坑位”里就有了必要的信息。
 	hook.updateQueue = queue;
 	hook.memoizedState = memoizedState;
 
-	// 5. 创建 dispatch 函数 (也就是我们常说的 `setState` 函数)。
-	//    `dispatchSetState` 是一个通用的、处理状态更新的函数。
-	//    我们使用 `bind` 方法来创建一个新的函数，这个新函数在调用 `dispatchSetState` 时，
-	//    其前几个参数（也就是 `fiber` 和 `updateQueue`）已经被预先填好了。
-	//    `currentlyRenderingFiber` 是一个模块级别的变量，指向当前正在渲染的组件的 FiberNode。
+	// 创建 dispatch 函数 (也就是我们常说的 `setState` 函数)。
 	// @ts-ignore
 	const dispatch = dispatchSetState.bind(null, currentlyRenderingFiber, queue);
 
-	// 6. 将 dispatch 函数关联到它的队列上。
-	//    这样做可以让更新队列本身在需要时能够引用到它的派发函数。
-	//    这对于更高级的队列处理或者开发工具来说可能有用。
+	// 将 dispatch 函数关联到它的队列上。
 	queue.dispatch = dispatch;
 
-	// 7. 返回 [state, setState] 这对组合。
-	//    这就是 `useState` 的使用者最终拿到的东西。
 	return [memoizedState, dispatch];
 }
 
 /**
- * @description
+ * @description 当你调用由 useState 返回的那个用于更新状态的函数时，最终就会执行到这个 dispatchSetState。
  * 1. 打包更新请求
  * 2. 把更新请求放入队列
  * 3. 触发重新渲染
@@ -249,29 +247,22 @@ function dispatchSetState<State>(
 	updateQueue: UpdateQueue<State>,
 	action: Action<State>
 ) {
-	// 1. 创建一个标准的 'Update' 对象。
-	//    它会把你的 'action'（新的状态值或更新函数）包装成一个
-	//    更新队列系统能理解的标准化 'Update' 结构。
-	const update = createUpdate(action);
+	const lane = requestUpdateLane();
+	const update = createUpdate(action, lane);
 
 	// 2. 把这个 'Update' 对象加入到 Hook 的更新队列中。
 	enqueueUpdate(updateQueue, update);
 
 	// 3. 为这个组件安排一次重新渲染。
-	//    'scheduleUpdateOnFiber' 会告诉协调器（reconciler），这个 'fiber'（组件）
-	//    有一个待处理的更新，需要在未来的工作循环中被重新处理（重新渲染）。
-	scheduleUpdateOnFiber(fiber);
+	scheduleUpdateOnFiber(fiber, lane);
 }
 
 /**
- * @description
- * - 在函数组件的初始挂载阶段，创建并管理一个与该组件的 FiberNode 相关联的 Hook 对象链表。
- * - 这个链表中的每一个 Hook 对象都对应组件内部的一次 Hook 调用（比如 useState），并且保留了 Hook 调用的顺序。
- * - 这个链表的起点存储在 FiberNode.memoizedState 中
+ * @description 在函数组件的初始挂载阶段，创建并管理一个与该组件的 FiberNode 相关联的 Hook 对象链表。
+ * @returns 返回新创建并链接好的 Hook 对象（空的）。
  */
 function mountWorkInProgresHook(): Hook {
-	// 1. 创建一个新的、空的 "Hook" 对象。
-	//    这个对象会用来存放某一个 Hook 调用（比如一次 useState 调用）的状态和更新队列。
+	// 这个对象会用来存放某一个 Hook 调用（比如一次 useState 调用）的状态和更新队列。
 	const hook: Hook = {
 		memoizedState: null, // 实际的状态值会在 mountState 函数里被填进去
 		updateQueue: null, // 这个状态对应的更新队列也会在 mountState 函数里创建
@@ -301,16 +292,9 @@ function mountWorkInProgresHook(): Hook {
 	} else {
 		// 这不是这个函数组件里的第一个 Hook (比如是第二次、第三次等等调用 useState)。
 		// 我们需要把这个新的 `hook` 连接到现有 Hook 链条的末尾。
-
-		// 3a. *前一个* Hook (`workInProgressHook` 当前指向的是前一个) 的 `next` 指针
-		//     被设置指向我们新创建的这个 `hook`。这就把新的 hook 加入到了链表中。
 		workInProgressHook.next = hook;
-		// 3b. 然后，更新 `workInProgressHook`，让它指向我们新创建的这个 `hook`，
-		//     使其成为下一次迭代时的“上一个已处理 Hook”。
 		workInProgressHook = hook;
 	}
 
-	// 4. 返回新创建的（并且现在已经连接好的）`hook` 对象。
-	//    调用它的函数 (比如 `mountState`) 接下来会把实际的状态值和更新队列放进这个 `hook` 对象里。
 	return workInProgressHook;
 }
