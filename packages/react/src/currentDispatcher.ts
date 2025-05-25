@@ -13,6 +13,7 @@ export interface Dispatcher {
 	 * @returns 该方法返回一个包含两个元素的数组：当前状态值 T 和一个用于更新该状态的 Dispatch<T> 函数
 	 */
 	useState: <T>(initialState: (() => T) | T) => [T, Dispatch<T>];
+	useEffect: (callback: () => void | void, deps: any[] | void) => void;
 }
 
 /**

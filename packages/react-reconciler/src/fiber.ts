@@ -8,6 +8,7 @@ import {
 import { Flags, NoFlags } from './fiberFlags';
 import { Container } from 'hostConfig';
 import { Lane, Lanes, NoLane, NoLanes } from './fiberLanes';
+import { Effect } from './fiberHooks';
 
 export class FiberNode {
 	type: any;
@@ -68,6 +69,15 @@ export class FiberNode {
 		this.pendingProps = pendingProps; // pendingProps 指的是组件从 React 元素（即 JSX 中定义的）接收到的，即将要应用的 props
 		this.memoizedProps = null; // memoizedProps 指的是在上一次渲染（render）过程中，组件最终实际使用的 props
 		this.memoizedState = null;
+
+		// 对于 HostRoot Fiber:
+		// 是 UpdateQueue<ReactElementType | null> 类型的实例，
+		// 这个队列的 shared.pending 属性会持有一个循环链表，
+		// 链表中的每个节点是一个 Update 对象，
+		// 每个 Update 对象的 payload 就是要渲染到根节点的 React 元素（例如 <App />）或者 null（用于卸载）。
+
+		// 对于 FunctionComponent Fiber:
+		// 用来存储一个 FCUpdateQueue 对象
 		this.updateQueue = null;
 		this.alternate = null;
 
@@ -78,6 +88,28 @@ export class FiberNode {
 	}
 }
 
+/**
+ * @interface PendingPassiveEffects
+ * @description 定义一个对象的结构，用于临时存储在一次 React 渲染和提交周期中，
+ *              所有待处理的“被动副作用”（Passive Effects）。
+ *              被动副作用主要指的是通过 `useEffect` Hook 注册的创建回调和销毁回调。
+ *              这些副作用被设计为在浏览器完成所有 DOM 更新和绘制之后异步执行。
+ *
+ * @property {Effect[]} unmount - 一个数组，用于收集所有在当前提交周期中，
+ *                                由于组件卸载或 `useEffect` 依赖项变化
+ *                                （导致旧的 effect 需要清理）而需要执行的销毁回调（清理函数）。
+ *                                数组中的每个元素通常是 `Effect` 循环链表的最后一个节点。
+ *
+ * @property {Effect[]} update - 一个数组，用于收集所有在当前提交周期中，
+ *                               由于组件首次挂载或 `useEffect` 依赖项变化
+ *                               而需要执行的创建回调。
+ *                               数组中的每个元素通常是 `Effect` 循环链表的最后一个节点。
+ */
+export interface PendingPassiveEffects {
+	unmount: Effect[];
+	update: Effect[];
+}
+
 // FiberRootNode 是 React 应用中所有 Fiber 节点的根，它代表了整个应用的实例
 export class FiberRootNode {
 	// container 指的是承载整个 React 应用的实际 DOM 元素。
@@ -86,6 +118,8 @@ export class FiberRootNode {
 	finishedWork: FiberNode | null;
 	pendingLanes: Lanes;
 	finishedLane: Lane; // 本次更新，消费的lane
+	pendingPassiveEffects: PendingPassiveEffects;
+
 	constructor(container: Container, hostRootFiber: FiberNode) {
 		this.container = container;
 		this.current = hostRootFiber;
@@ -93,6 +127,12 @@ export class FiberRootNode {
 		this.finishedWork = null;
 		this.pendingLanes = NoLanes;
 		this.finishedLane = NoLane;
+
+		// 收集回调的容器
+		this.pendingPassiveEffects = {
+			unmount: [],
+			update: []
+		};
 	}
 }
 

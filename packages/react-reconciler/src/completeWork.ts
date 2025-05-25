@@ -125,7 +125,8 @@ function appendAllChildren(parent: Container, wip: FiberNode) {
 			//    node?.stateNode 使用了可选链，以防 stateNode 意外为 null (虽然理论上此时不应为 null)。
 			appendInitialChild(parent, node?.stateNode);
 		} else if (node.child !== null) {
-			// 5. 如果当前 node 不是直接的宿主节点 (例如，它可能是一个函数组件)，
+			// 5. 如果当前 node 不是直接的宿主节点 (例如，它可能是一个
+			// )，
 			//    并且它拥有自己的子节点 (node.child !== null)，
 			//    这意味着我们需要更深入地遍历这个 node 的子树，以找到可附加的真实 DOM 节点。
 			// 6. 确保这个更深层子节点的 return 指针指向其直接父 Fiber (node)。

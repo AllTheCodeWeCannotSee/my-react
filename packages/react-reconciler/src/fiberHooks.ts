@@ -12,11 +12,19 @@ import {
 	UpdateQueue
 } from './updateQueue';
 import { scheduleUpdateOnFiber } from './workLoop';
+import { Flags, PassiveEffect } from './fiberFlags';
+import { HookHasEffect, Passive } from './hookEffectTags';
 
 let currentlyRenderingFiber: FiberNode | null = null;
 
-// 指向链表中当前正在处理的hook（fiberNode 中的 memoizedState 指向一个链表，链表的元素是Hooks（useState、useEffect...））
+/**
+ * @param workInProgressHook 指向链表中当前正在处理的 Hook, 指向链表的尾部 (Fiber.memoizedState = workInProgressHook)
+ */
 let workInProgressHook: Hook | null = null;
+
+/**
+ * @param currentHook 指向上一次渲染的 Hook 链表中，与当前正在处理的这个 Hook 调用相对应的那个 Hook 对象
+ */
 let currentHook: Hook | null = null;
 let renderLane: Lane = NoLane;
 
@@ -35,6 +43,22 @@ interface Hook {
 	next: Hook | null;
 }
 
+export interface Effect {
+	tag: Flags;
+	create: EffectCallback | void;
+	destroy: EffectCallback | void;
+	deps: EffectDeps;
+	next: Effect | null;
+}
+
+export interface FCUpdateQueue<State> extends UpdateQueue<State> {
+	// 指向effect环状链表中，最后一个
+	lastEffect: Effect | null;
+}
+
+type EffectCallback = () => void;
+type EffectDeps = any[] | null;
+
 /**
  * @description 执行一个函数式组件 (Function Component) 并获取它渲染出来的内容
  * @param wip 是 FunctionComponent 类型的fibernode
@@ -48,6 +72,9 @@ export function renderWithHooks(wip: FiberNode, lane: Lane) {
 	currentlyRenderingFiber = wip;
 	// 重置 hooks链表
 	wip.memoizedState = null;
+
+	// 重置 effect链表
+	wip.updateQueue = null;
 	renderLane = lane;
 
 	const current = wip.alternate;
@@ -74,12 +101,153 @@ export function renderWithHooks(wip: FiberNode, lane: Lane) {
 }
 
 const HooksDispatcherOnMount: Dispatcher = {
-	useState: mountState
+	useState: mountState,
+	useEffect: mountEffect
 };
 
 const HooksDispatcherOnUpdate: Dispatcher = {
-	useState: updateState
+	useState: updateState,
+	useEffect: updateEffect
 };
+
+/**
+ * @description useEffect Hook 在组件首次挂载时的实现
+ * @param create 用户传入的 useEffect 的第一个参数，即副作用的创建函数
+ * @param deps 用户传入的 useEffect 的第二个参数，即依赖项数组 (可选)
+ */
+function mountEffect(create: EffectCallback | void, deps: EffectDeps | void) {
+	// 获取这次 useEffect 调用的 Hook 对象
+	const hook = mountWorkInProgresHook();
+	const nextDeps = deps === undefined ? null : deps;
+
+	// 在当前正在渲染的 FiberNode 上打上 PassiveEffect
+	(currentlyRenderingFiber as FiberNode).flags |= PassiveEffect;
+
+	// 创建并存储 Effect 对象
+	hook.memoizedState = pushEffect(
+		Passive | HookHasEffect,
+		create,
+		undefined,
+		nextDeps
+	);
+}
+
+/**
+ * @function updateEffect
+ * @description `useEffect` Hook 在组件更新阶段的实现。
+ *              它会比较新的依赖项与上一次渲染时的依赖项：
+ *              - 如果依赖项没有变化，它仍然会创建一个新的 Effect 对象来保留上一次的销毁函数和依赖项信息，
+ *                但这个 Effect 对象不会被打上 `HookHasEffect` 标记，因此其创建函数不会在本次提交中执行。
+ *              - 如果依赖项发生了变化（或者没有提供依赖项数组，意味着每次渲染都执行），
+ *                当前组件的 FiberNode 会被打上 `PassiveEffect` 标记，
+ *                并且会创建一个新的 Effect 对象，该对象带有 `HookHasEffect` 标记，
+ *                其创建函数将在本次提交后执行。新的 Effect 对象会保留上一次的销毁函数，
+ *                以便在执行新的创建函数之前调用。
+ *
+ * @param {EffectCallback | void} create - 用户传入的 `useEffect` 的第一个参数，即副作用的创建函数。
+ * @param {EffectDeps | void} deps - 用户传入的 `useEffect` 的第二个参数，即依赖项数组 (可选)。
+ */
+function updateEffect(create: EffectCallback | void, deps: EffectDeps | void) {
+	const hook = updateWorkInProgresHook();
+	const nextDeps = deps === undefined ? null : deps;
+	let destroy: EffectCallback | void;
+
+	if (currentHook !== null) {
+		const prevEffect = currentHook.memoizedState as Effect;
+		destroy = prevEffect.destroy;
+
+		if (nextDeps !== null) {
+			// 浅比较依赖
+			const prevDeps = prevEffect.deps;
+			if (areHookInputsEqual(nextDeps, prevDeps)) {
+				hook.memoizedState = pushEffect(Passive, create, destroy, nextDeps);
+				return;
+			}
+		}
+		// 浅比较 不相等
+		(currentlyRenderingFiber as FiberNode).flags |= PassiveEffect;
+		hook.memoizedState = pushEffect(
+			Passive | HookHasEffect,
+			create,
+			destroy,
+			nextDeps
+		);
+	}
+}
+
+/**
+ * @function areHookInputsEqual
+ * @description 浅比较两个依赖项数组 (`EffectDeps`) 是否相等。
+ * @param {EffectDeps} nextDeps - 新的依赖项数组。`EffectDeps` 类型通常是 `any[] | null`。
+ * @param {EffectDeps} prevDeps - 上一次渲染时的依赖项数组。
+ * @returns {boolean} 如果两个依赖项数组被认为是相等的，则返回 `true`；否则返回 `false`。
+ */
+function areHookInputsEqual(nextDeps: EffectDeps, prevDeps: EffectDeps) {
+	if (prevDeps === null || nextDeps === null) {
+		return false;
+	}
+	for (let i = 0; i < prevDeps.length && i < nextDeps.length; i++) {
+		if (Object.is(prevDeps[i], nextDeps[i])) {
+			continue;
+		}
+		return false;
+	}
+	return true;
+}
+
+/**
+ * @description 创建一个新的 Effect 对象，并将其添加到当前 FiberNode 的 Effect 链表的末尾。
+ * @param hookFlags Effect 的标记 (例如 Passive | HookHasEffect)。
+ * @param create 副作用的创建函数。
+ * @param destroy 副作用的销毁函数 (在挂载时通常是 undefined)。
+ * @param deps 依赖项数组。
+ * @returns 返回新创建的 Effect 对象。
+ */
+
+function pushEffect(
+	hookFlags: Flags,
+	create: EffectCallback | void,
+	destroy: EffectCallback | void,
+	deps: EffectDeps
+): Effect {
+	const effect: Effect = {
+		tag: hookFlags,
+		create,
+		destroy,
+		deps,
+		next: null
+	};
+	const fiber = currentlyRenderingFiber as FiberNode;
+	const updateQueue = fiber.updateQueue as FCUpdateQueue<any>;
+
+	if (updateQueue === null) {
+		// // 如果当前 FiberNode 还没有 updateQueue
+		const updateQueue = createFCUpdateQueue();
+		fiber.updateQueue = updateQueue;
+		effect.next = effect;
+		updateQueue.lastEffect = effect;
+	} else {
+		// 如果 updateQueue 已经存在
+		// 插入effect
+		const lastEffect = updateQueue.lastEffect;
+		if (lastEffect === null) {
+			effect.next = effect;
+			updateQueue.lastEffect = effect;
+		} else {
+			const firstEffect = lastEffect.next;
+			lastEffect.next = effect;
+			effect.next = firstEffect;
+			updateQueue.lastEffect = effect;
+		}
+	}
+	return effect;
+}
+
+function createFCUpdateQueue<State>() {
+	const updateQueue = createUpdateQueue<State>() as FCUpdateQueue<State>;
+	updateQueue.lastEffect = null;
+	return updateQueue;
+}
 
 /**
  * @description
@@ -180,16 +348,15 @@ function updateWorkInProgresHook(): Hook {
 	};
 
 	// 4. 将新的 Hook 对象链接到 work-in-progress Fiber 的 Hook 链表中
-	// `workInProgressHook` 是一个模块级变量，用于在构建本次渲染的 Hook 链表时，追踪链表的尾部。
 	if (workInProgressHook === null) {
-		// 这是为当前 work-in-progress Fiber 创建的第一个 Hook 对象
 		if (currentlyRenderingFiber === null) {
 			// 安全检查：Hooks 必须在函数组件内部调用。
-			// `currentlyRenderingFiber` 应该由 `renderWithHooks` 设置。
 			throw new Error('请在函数组件内调用hook');
 		} else {
 			workInProgressHook = newHook; // `workInProgressHook` 指向这个新创建的 Hook (它现在是链表尾部)
-			currentlyRenderingFiber.memoizedState = workInProgressHook; // 将 work-in-progress Fiber 的 `memoizedState` 指向这个新 Hook (它也是链表头部)
+
+			// 将 work-in-progress Fiber 的 `memoizedState` 指向这个新 Hook (它也是链表头部)
+			currentlyRenderingFiber.memoizedState = workInProgressHook;
 		}
 	} else {
 		// 这不是第一个 Hook，将新 Hook 连接到链表的末尾
@@ -259,39 +426,28 @@ function dispatchSetState<State>(
 }
 
 /**
- * @description 在函数组件的初始挂载阶段，创建并管理一个与该组件的 FiberNode 相关联的 Hook 对象链表。
+ * @description 在函数组件的初始挂载阶段，创建一个 Hook 对象，并插入到链表中
  * @returns 返回新创建并链接好的 Hook 对象（空的）。
  */
 function mountWorkInProgresHook(): Hook {
-	// 这个对象会用来存放某一个 Hook 调用（比如一次 useState 调用）的状态和更新队列。
 	const hook: Hook = {
-		memoizedState: null, // 实际的状态值会在 mountState 函数里被填进去
-		updateQueue: null, // 这个状态对应的更新队列也会在 mountState 函数里创建
-		next: null // 指向这个组件里下一个 Hook 的指针（如果有的话）
+		memoizedState: null,
+		updateQueue: null,
+		next: null
 	};
 
-	// 2. 检查这是否是当前组件正在处理的第一个 Hook。
-	//    如果 `workInProgressHook` 是 null，就意味着我们还没为这个组件处理过任何 Hook。
+	// 函数组件的第一个 Hook
 	if (workInProgressHook === null) {
 		// 这是这个函数组件里的第一个 Hook (比如第一次调用 useState)。
-
-		// 2a. 安全检查：确保我们确实是在一个函数组件的渲染阶段内部。
-		//     `currentlyRenderingFiber` 应该已经被 `renderWithHooks` 函数设置成了
-		//     我们当前正在渲染的组件的 FiberNode。
 		if (currentlyRenderingFiber === null) {
 			// 如果不是，那就有问题了 —— Hook 只能在函数组件内部调用。
 			throw new Error('请在函数组件内调用hook');
 		} else {
-			// 2b. 这是第一个 Hook，所以：
-			//    - `workInProgressHook` (我们用来追踪上一个已处理 Hook 的变量) 现在指向这个新的 `hook`。
 			workInProgressHook = hook;
-			//    - 组件的 FiberNode (`currentlyRenderingFiber`) 的 `memoizedState` 属性
-			//      被设置指向这个 `hook`。这样，这个 Hook 链表中的 *第一个* Hook
-			//      就可以从 FiberNode 访问到了。
 			currentlyRenderingFiber.memoizedState = workInProgressHook;
 		}
 	} else {
-		// 这不是这个函数组件里的第一个 Hook (比如是第二次、第三次等等调用 useState)。
+		// 不是这个函数组件里的第一个 Hook
 		// 我们需要把这个新的 `hook` 连接到现有 Hook 链条的末尾。
 		workInProgressHook.next = hook;
 		workInProgressHook = hook;

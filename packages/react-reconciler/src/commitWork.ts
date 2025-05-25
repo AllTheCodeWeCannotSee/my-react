@@ -6,11 +6,14 @@ import {
 	Instance,
 	removeChild
 } from 'hostConfig';
-import { FiberNode, FiberRootNode } from './fiber';
+import { FiberNode, FiberRootNode, PendingPassiveEffects } from './fiber';
 import {
 	ChildDeletion,
+	Flags,
 	MutationMask,
 	NoFlags,
+	PassiveEffect,
+	PassiveMask,
 	Placement,
 	Update
 } from './fiberFlags';
@@ -20,6 +23,8 @@ import {
 	HostRoot,
 	HostText
 } from './workTags';
+import { Effect, FCUpdateQueue } from './fiberHooks';
+import { HookHasEffect } from './hookEffectTags';
 
 let nextEffect: FiberNode | null = null;
 
@@ -29,8 +34,12 @@ let nextEffect: FiberNode | null = null;
  * * Update (更新)：修改现有 DOM 节点的属性或文本内容。
  * * ChildDeletion (子节点删除)：从 DOM 中移除不再需要的节点
  * @param finishedWork
+ * @param root
  */
-export const commitMutationEffects = (finishedWork: FiberNode) => {
+export const commitMutationEffects = (
+	finishedWork: FiberNode,
+	root: FiberRootNode
+) => {
 	// 1. 初始化一个全局（或模块作用域）变量 nextEffect，
 	//    将其指向传入的 finishedWork (通常是完成了协调工作的 Fiber 树的根节点，或者某个子树的根)。
 	//    nextEffect 将作为遍历 Fiber 树以执行副作用的游标。
@@ -49,7 +58,7 @@ export const commitMutationEffects = (finishedWork: FiberNode) => {
 		//        - 这个条件判断 nextEffect 的子树中是否包含任何需要执行的 DOM 变更操作。
 		//    child !== null: 确保有子节点可以向下遍历。
 		if (
-			(nextEffect.subtreeFlags & MutationMask) !== NoFlags &&
+			(nextEffect.subtreeFlags & (MutationMask | PassiveMask)) !== NoFlags &&
 			child !== null
 		) {
 			// 5. 如果子树中有变更，并且有子节点，则将 nextEffect 指向其第一个子节点，
@@ -63,7 +72,7 @@ export const commitMutationEffects = (finishedWork: FiberNode) => {
 				// 7. 对当前的 nextEffect 节点执行其自身的变更类副作用。
 				//    commitMutaitonEffectsOnFiber 函数会检查 nextEffect.flags，
 				//    并执行相应的 Placement, Update, 或 ChildDeletion 操作。
-				commitMutaitonEffectsOnFiber(nextEffect);
+				commitMutaitonEffectsOnFiber(nextEffect, root);
 
 				// 8. 获取当前 nextEffect 节点的兄弟节点。
 				const sibling: FiberNode | null = nextEffect.sibling;
@@ -93,7 +102,10 @@ export const commitMutationEffects = (finishedWork: FiberNode) => {
  * @description 针对单个 Fiber 节点来执行其身上标记的“变更类”副作用（Mutation Effects）。“变更类”副作用指的是那些会直接修改 DOM 结构的操作，比如插入新节点、更新现有节点、删除节点。
  * @param finishedWork 当前有flags的节点
  */
-const commitMutaitonEffectsOnFiber = (finishedWork: FiberNode) => {
+const commitMutaitonEffectsOnFiber = (
+	finishedWork: FiberNode,
+	root: FiberRootNode
+) => {
 	// 1. 获取当前 finishedWork Fiber 节点的副作用标记 (flags)
 	const flags = finishedWork.flags;
 
@@ -123,12 +135,143 @@ const commitMutaitonEffectsOnFiber = (finishedWork: FiberNode) => {
 		const deletions = finishedWork.deletions;
 		if (deletions !== null) {
 			deletions.forEach((childToDelete) => {
-				commitDeletion(childToDelete);
+				commitDeletion(childToDelete, root);
 			});
 		}
 		finishedWork.flags &= ~ChildDeletion;
 	}
+
+	if ((flags & PassiveEffect) !== NoFlags) {
+		// 收集回调
+		commitPassiveEffect(finishedWork, root, 'update');
+		finishedWork.flags &= ~PassiveEffect;
+	}
 };
+
+/**
+ * @description 收集函数组件中需要执行的被动副作用 (useEffect)，
+ *              并将它们添加到 FiberRootNode 的 pendingPassiveEffects 队列中。
+ * @param fiber 当前正在处理的 Fiber 节点。
+ * @param root FiberRootNode，代表整个应用的根。
+ * @param type 'update' 或 'unmount'，指示当前是处理更新时的副作用还是卸载时的副作用。
+ */
+function commitPassiveEffect(
+	fiber: FiberNode,
+	root: FiberRootNode,
+	type: keyof PendingPassiveEffects
+) {
+	// update unmount
+	if (
+		fiber.tag !== FunctionComponent ||
+		(type === 'update' && (fiber.flags & PassiveEffect) === NoFlags)
+	) {
+		return;
+	}
+	const updateQueue = fiber.updateQueue as FCUpdateQueue<any>;
+	if (updateQueue !== null) {
+		if (updateQueue.lastEffect === null && __DEV__) {
+			console.error('当FC存在PassiveEffect flag时，不应该不存在effect');
+		}
+		root.pendingPassiveEffects[type].push(updateQueue.lastEffect as Effect);
+	}
+}
+
+/**
+ * @function commitHookEffectList
+ * @description 遍历一个 Effect 对象的循环链表，并对链表中那些 `tag` 属性
+ *              与传入的 `flags` 参数匹配的 Effect 对象执行一个指定的回调函数。
+ *              这个函数是处理 useEffect Hook 副作用（如执行创建或销毁函数）的通用辅助函数。
+ *
+ * @param {Flags} flags - 一个位掩码，用于筛选需要处理的 Effect 对象。
+ *                        只有当 Effect 对象的 `tag` 属性通过按位与操作 (`&`)
+ *                        包含所有在 `flags` 中设置的位时，该 Effect 对象才会被处理。
+ *                        例如，如果 flags 是 `Passive | HookHasEffect`，则只有同时具有
+ *                        `Passive` 和 `HookHasEffect` 标记的 Effect 对象才会匹配。
+ * @param {Effect} lastEffect - Effect 循环链表中的最后一个 Effect 对象。
+ *                              函数会从 `lastEffect.next` (即链表的第一个 Effect) 开始遍历。
+ *                              这个链表通常存储在函数组件 FiberNode 的 `updateQueue.lastEffect` 中。
+ * @param {(effect: Effect) => void} callback - 一个回调函数，它会接收每个匹配条件的 Effect 对象作为参数。
+ *                                             这个回调函数负责执行具体的操作，例如调用 Effect 的
+ *                                             `create` 或 `destroy` 方法。
+ */
+function commitHookEffectList(
+	flags: Flags,
+	lastEffect: Effect,
+	callback: (effect: Effect) => void
+) {
+	let effect = lastEffect.next as Effect;
+
+	do {
+		if ((effect.tag & flags) === flags) {
+			callback(effect);
+		}
+		effect = effect.next as Effect;
+	} while (effect !== lastEffect.next);
+}
+
+/**
+ * @function commitHookEffectListUnmount
+ * @description 遍历 Effect 循环链表，执行所有匹配指定 `flags` (通常是 `Passive`) 的 Effect 对象的销毁函数。
+ *              这个函数主要用于组件卸载时，清理所有相关的 `useEffect` 副作用。
+ *              在执行销毁函数后，它还会从 Effect 的 `tag` 中移除 `HookHasEffect` 标记，
+ *              表示该 Effect 的销毁回调已被处理。
+ *
+ * @param {Flags} flags - 用于筛选需要执行销毁回调的 Effect 对象的标记。
+ *                        通常是 `Passive`，表示处理所有被动副作用的销毁。
+ * @param {Effect} lastEffect - Effect 循环链表中的最后一个 Effect 对象。
+ */
+export function commitHookEffectListUnmount(flags: Flags, lastEffect: Effect) {
+	commitHookEffectList(flags, lastEffect, (effect) => {
+		const destroy = effect.destroy;
+		if (typeof destroy === 'function') {
+			destroy();
+		}
+		effect.tag &= ~HookHasEffect;
+	});
+}
+
+/**
+ * @function commitHookEffectListDestroy
+ * @description 遍历 Effect 循环链表，执行所有匹配指定 `flags` (通常是 `Passive | HookHasEffect`)
+ *              的 Effect 对象的销毁函数。
+ *              这个函数主要用于 `useEffect` 依赖项发生变化，需要先清理旧的副作用，
+ *              然后再执行新的副作用创建函数的场景。
+ *              它只执行销毁函数，不修改 Effect 的 `tag`。
+ *
+ * @param {Flags} flags - 用于筛选需要执行销毁回调的 Effect 对象的标记。
+ *                        通常是 `Passive | HookHasEffect`，表示处理那些在本次更新中
+ *                        需要被重新触发（因此旧的需要销毁）的被动副作用。
+ * @param {Effect} lastEffect - Effect 循环链表中的最后一个 Effect 对象。
+ */
+export function commitHookEffectListDestroy(flags: Flags, lastEffect: Effect) {
+	commitHookEffectList(flags, lastEffect, (effect) => {
+		const destroy = effect.destroy;
+		if (typeof destroy === 'function') {
+			destroy();
+		}
+	});
+}
+
+/**
+ * @function commitHookEffectListCreate
+ * @description 遍历 Effect 循环链表，执行所有匹配指定 `flags` (通常是 `Passive | HookHasEffect`)
+ *              的 Effect 对象的创建函数。
+ *              这个函数主要用于组件首次挂载或 `useEffect` 依赖项发生变化，需要执行新的副作用创建函数的场景。
+ *              执行创建函数后，如果创建函数返回了一个清理函数，该清理函数会被赋值给 Effect 对象的 `destroy` 属性。
+ *
+ * @param {Flags} flags - 用于筛选需要执行创建回调的 Effect 对象的标记。
+ *                        通常是 `Passive | HookHasEffect`，表示处理那些在本次更新中
+ *                        需要被触发的被动副作用。
+ * @param {Effect} lastEffect - Effect 循环链表中的最后一个 Effect 对象。
+ */
+export function commitHookEffectListCreate(flags: Flags, lastEffect: Effect) {
+	commitHookEffectList(flags, lastEffect, (effect) => {
+		const create = effect.create;
+		if (typeof create === 'function') {
+			effect.destroy = create();
+		}
+	});
+}
 
 /**
  * @description 收集一个列表，这个列表包含了那些互为兄弟节点、并且是需要从它们共同的 DOM 父节点中被显式移除的直接 Host 子 Fiber 节点
@@ -164,7 +307,7 @@ function recordHostChildrenToDelete(
  * * 断开 Fiber 链接
  * @param childToDelete
  */
-function commitDeletion(childToDelete: FiberNode) {
+function commitDeletion(childToDelete: FiberNode, root: FiberRootNode) {
 	const rootChildrenToDelete: FiberNode[] = [];
 
 	// 递归子树
@@ -178,7 +321,8 @@ function commitDeletion(childToDelete: FiberNode) {
 				recordHostChildrenToDelete(rootChildrenToDelete, unmountFiber);
 				return;
 			case FunctionComponent: // 如果是函数组件
-				// TODO useEffect unmount 、解绑ref
+				// TODO 解绑ref
+				commitPassiveEffect(unmountFiber, root, 'unmount');
 				return;
 			default:
 				if (__DEV__) {
