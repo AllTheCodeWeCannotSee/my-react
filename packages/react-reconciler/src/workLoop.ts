@@ -32,7 +32,7 @@ import { HookHasEffect, Passive } from './hookEffectTags';
 
 let workInProgress: FiberNode | null = null;
 let wipRootRenderLane: Lane = NoLane;
-let rootDoesHasPassiveEffects: boolean = false;
+let rootDoesHasPassiveEffects = false;
 
 /**
  * @description 为新的渲染或更新周期准备初始环境。

@@ -5,7 +5,7 @@
 // 但它不知道 如何 在浏览器中具体执行这些操作。这些具体的实现细节就由 hostConfig.ts 来提供。
 
 import { FiberNode } from 'react-reconciler/src/fiber';
-import { HostText } from 'react-reconciler/src/workTags';
+import { HostComponent, HostText } from 'react-reconciler/src/workTags';
 import { Props } from 'shared/ReactTypes';
 import { DOMElement, updateFiberProps } from './SyntheticEvent';
 
@@ -60,6 +60,8 @@ export function commitUpdate(fiber: FiberNode) {
 		case HostText:
 			const text = fiber.memoizedProps?.content;
 			return commitTextUpdate(fiber.stateNode, text);
+		case HostComponent:
+			return updateFiberProps(fiber.stateNode, fiber.memoizedProps);
 
 		default:
 			if (__DEV__) {

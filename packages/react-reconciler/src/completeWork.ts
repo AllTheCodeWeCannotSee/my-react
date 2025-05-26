@@ -2,7 +2,8 @@ import {
 	appendInitialChild,
 	Container,
 	createInstance,
-	createTextInstance
+	createTextInstance,
+	Instance
 } from 'hostConfig';
 import { FiberNode } from './fiber';
 import { NoFlags, Update } from './fiberFlags';
@@ -13,7 +14,6 @@ import {
 	FunctionComponent,
 	Fragment
 } from './workTags';
-import { updateFiberProps } from 'react-dom/src/SyntheticEvent';
 
 /**
  * @description 给传入的 fiber 节点的 flags 属性添加上 Update 标记。
@@ -38,10 +38,12 @@ export const completeWork = (wip: FiberNode) => {
 
 	switch (wip.tag) {
 		case HostComponent:
-			// 5. 检查是否是更新过程 (current 存在) 并且真实 DOM 元素已创建 (wip.stateNode 存在)
 			if (current !== null && wip.stateNode) {
-				// 处理 DOM 属性的更新。
-				updateFiberProps(wip.stateNode, newProps);
+				// TODO update
+				// 1. props是否变化 {onClick: xx} {onClick: xxx}
+				// 2. 变了 Update flag
+				// className style
+				markUpdate(wip);
 			} else {
 				// 7. 挂载路径：如果是新节点
 				//    7a. 调用 hostConfig 中的 createInstance 函数，根据 wip.type (例如 "div")
@@ -110,7 +112,7 @@ export const completeWork = (wip: FiberNode) => {
  * @param parent 真实 DOM 元素
  * @param wip 该DOM元素对应的fiber-node
  */
-function appendAllChildren(parent: Container, wip: FiberNode) {
+function appendAllChildren(parent: Container | Instance, wip: FiberNode) {
 	// 1. 从 wip (当前父 Fiber 节点) 的第一个子 Fiber 节点开始遍历
 	// node 作为遍历的指针
 	let node = wip.child;
