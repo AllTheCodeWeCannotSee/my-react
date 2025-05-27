@@ -11,6 +11,9 @@ export interface Update<State> {
 	next: Update<any> | null;
 }
 
+/**
+ * @description Hook.UpdateQueue
+ */
 export interface UpdateQueue<State> {
 	shared: {
 		pending: Update<State> | null;
