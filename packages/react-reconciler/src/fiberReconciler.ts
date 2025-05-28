@@ -1,4 +1,8 @@
 import { Container } from 'hostConfig';
+import {
+	unstable_ImmediatePriority,
+	unstable_runWithPriority
+} from 'scheduler';
 import { ReactElementType } from 'shared/ReactTypes';
 import { FiberNode, FiberRootNode } from './fiber';
 import {
@@ -31,20 +35,22 @@ export function createContainer(container: Container) {
  *              然后调度一次新的渲染工作。
  * @param element 要渲染的 React 元素 (例如 <App />)，或者 null (表示卸载)。
  * @param root FiberRootNode 实例，代表整个应用的根。
- * @returns 返回传入的 element (这主要用于保持 API 的一致性，实际返回值可能不常用)。
+ * @returns 返回传入的 element
  */
 export function updateContainer(
 	element: ReactElementType | null,
 	root: FiberRootNode
 ) {
-	const hostRootFiber = root.current;
-	const lane = requestUpdateLane();
-	// element: 对应reactDOM.createRoot(root).render(<App />)中的<App />
-	const update = createUpdate<ReactElementType | null>(element, lane);
-	enqueueUpdate(
-		hostRootFiber.updateQueue as UpdateQueue<ReactElementType | null>,
-		update
-	);
-	scheduleUpdateOnFiber(hostRootFiber, lane);
+	// mount 时的更新优先级
+	unstable_runWithPriority(unstable_ImmediatePriority, () => {
+		const hostRootFiber = root.current;
+		const lane = requestUpdateLane();
+		const update = createUpdate<ReactElementType | null>(element, lane);
+		enqueueUpdate(
+			hostRootFiber.updateQueue as UpdateQueue<ReactElementType | null>,
+			update
+		);
+		scheduleUpdateOnFiber(hostRootFiber, lane);
+	});
 	return element;
 }

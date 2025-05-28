@@ -79,12 +79,26 @@ export function scheduleUpdateOnFiber(fiber: FiberNode, lane: Lane) {
  * @description 确保 FiberRootNode 的更新任务被正确调度。
  *              此函数会检查根节点上待处理的更新（`pendingLanes`），
  *              并根据最高优先级的 Lane 来决定如何以及是否需要调度或重新调度一个回调任务。
- *              - 如果没有待处理的更新，它会取消任何现有的回调。
- *              - 如果新的最高优先级与当前已调度的回调优先级相同，则不执行任何操作。
- *              - 如果优先级发生变化或之前没有回调，它会取消旧的回调（如果存在），
- *                并根据新的最高优先级（例如 `SyncLane` 或其他异步 Lane）
- *                使用 `scheduler` 模块（通过 `scheduleSyncCallback` 或 `scheduleCallback`）
- *                来安排一个新的回调任务（`performSyncWorkOnRoot` 或 `performConcurrentWorkOnRoot`）。
+ *
+ *              主要逻辑步骤：
+ *              1. 获取 `root.pendingLanes` 中最高优先级的 `updateLane`。
+ *              2. 如果 `updateLane` 为 `NoLane` (没有待处理的更新)：
+ *                 - 如果存在已调度的回调 (`existingCallback`)，则调用 `unstable_cancelCallback` 取消它。
+ *                 - 清空 `root.callbackNode` 和 `root.callbackPriority`。
+ *                 - 函数返回。
+ *              3. 如果 `updateLane` 的优先级 (`curPriority`) 与 `root.callbackPriority` (上一个已调度回调的优先级 `prevPriority`) 相同：
+ *                 - 函数直接返回，避免重复调度。
+ *              4. 如果优先级不同（或之前没有回调）：
+ *                 - 如果存在 `existingCallback`，则调用 `unstable_cancelCallback` 取消它。
+ *                 - 根据 `updateLane` 的类型调度新的回调：
+ *                   - 如果 `updateLane` 是 `SyncLane` (同步优先级)：
+ *                     - 调用 `scheduleSyncCallback` 将 `performSyncWorkOnRoot` 注册为一个同步回调。
+ *                     - 调用 `scheduleMicroTask(flushSyncCallbacks)` 安排在下一个微任务中执行所有同步回调。
+ *                   - 如果 `updateLane` 是其他异步优先级：
+ *                     - 调用 `lanesToSchedulerPriority` 将 React Lane 转换为 Scheduler 优先级。
+ *                     - 调用 `scheduleCallback` (来自 `scheduler` 包) 来安排 `performConcurrentWorkOnRoot` 作为宏任务执行。
+ *                     - 将返回的 `newCallbackNode` 存储在 `root.callbackNode`。
+ *                 - 更新 `root.callbackNode` (对于异步任务) 和 `root.callbackPriority`。
  *
  * @param {FiberRootNode} root - 需要检查和调度其更新的 FiberRootNode 实例。
  */
@@ -112,11 +126,15 @@ function ensureRootIsScheduled(root: FiberRootNode) {
 	}
 	let newCallbackNode = null;
 
+	if (__DEV__) {
+		console.log(
+			`在${updateLane === SyncLane ? '微' : '宏'}任务中调度，优先级：`,
+			updateLane
+		);
+	}
+
 	if (updateLane === SyncLane) {
 		// 同步优先级 用微任务调度
-		if (__DEV__) {
-			console.log('在微任务中调度，优先级：', updateLane);
-		}
 		// [performSyncWorkOnRoot, performSyncWorkOnRoot, performSyncWorkOnRoot]
 		scheduleSyncCallback(performSyncWorkOnRoot.bind(null, root));
 		scheduleMicroTask(flushSyncCallbacks);
@@ -124,6 +142,7 @@ function ensureRootIsScheduled(root: FiberRootNode) {
 		// 其他优先级 用宏任务调度
 		const schedulerPriority = lanesToSchedulerPriority(updateLane);
 
+		// scheduleCallback: 将宏任务放进队列
 		newCallbackNode = scheduleCallback(
 			schedulerPriority,
 			// @ts-ignore

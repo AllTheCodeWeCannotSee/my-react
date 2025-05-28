@@ -1,5 +1,6 @@
 import { Dispatch } from 'react/src/currentDispatcher';
 import { Dispatcher } from 'react/src/currentDispatcher';
+import currentBatchConfig from 'react/src/currentBatchConfig';
 import internals from 'shared/internals';
 import { Action } from 'shared/ReactTypes';
 import { FiberNode } from './fiber';
@@ -105,12 +106,14 @@ export function renderWithHooks(wip: FiberNode, lane: Lane) {
 
 const HooksDispatcherOnMount: Dispatcher = {
 	useState: mountState,
-	useEffect: mountEffect
+	useEffect: mountEffect,
+	useTransition: mountTransition
 };
 
 const HooksDispatcherOnUpdate: Dispatcher = {
 	useState: updateState,
-	useEffect: updateEffect
+	useEffect: updateEffect,
+	useTransition: updateTransition
 };
 
 /**
@@ -295,17 +298,16 @@ function updateState<State>(): [State, Dispatch<State>] {
 		// 保存在current中
 		current.baseQueue = pending;
 		queue.shared.pending = null;
-
-		if (baseQueue !== null) {
-			const {
-				memoizedState,
-				baseQueue: newBaseQueue,
-				baseState: newBaseState
-			} = processUpdateQueue(baseState, baseQueue, renderLane);
-			hook.memoizedState = memoizedState;
-			hook.baseState = newBaseState;
-			hook.baseQueue = newBaseQueue;
-		}
+	}
+	if (baseQueue !== null) {
+		const {
+			memoizedState,
+			baseQueue: newBaseQueue,
+			baseState: newBaseState
+		} = processUpdateQueue(baseState, baseQueue, renderLane);
+		hook.memoizedState = memoizedState;
+		hook.baseState = newBaseState;
+		hook.baseQueue = newBaseQueue;
 	}
 
 	return [hook.memoizedState, queue.dispatch as Dispatch<State>];
@@ -426,6 +428,7 @@ function mountState<State>(
 	const queue = createUpdateQueue<State>();
 	hook.updateQueue = queue;
 	hook.memoizedState = memoizedState;
+	hook.baseState = memoizedState;
 
 	// 创建 dispatch 函数 (也就是我们常说的 `setState` 函数)。
 	// @ts-ignore
@@ -435,6 +438,73 @@ function mountState<State>(
 	queue.dispatch = dispatch;
 
 	return [memoizedState, dispatch];
+}
+
+/**
+ * @function mountTransition
+ * @description `useTransition` Hook 在组件首次挂载时的实现。
+ *              它内部会调用 `mountState` 来创建一个布尔类型的状态 `isPending` (初始值为 `false`)
+ *              以及一个用于更新该状态的函数 `setPending`。
+ *              然后，它会创建一个 `startTransition` 函数，该函数在被调用时会：
+ *              1. 将 `isPending` 状态设置为 `true`。
+ *              2. 设置全局的 `currentBatchConfig.transition`，标记当前处于一个 transition 过程中。
+ *              3. 执行用户传入的回调函数。
+ *              4. 将 `isPending` 状态设置为 `false`。
+ *              5. 恢复全局的 `currentBatchConfig.transition`。
+ *              这个 `startTransition` 函数会被存储在当前 Hook 对象的 `memoizedState` 中。
+ *
+ * @returns {[boolean, (callback: () => void) => void]} 返回一个包含两个元素的数组：
+ *          - `isPending` (boolean): 一个布尔值，指示 transition 是否正在进行中。
+ *          - `startTransition` (function): 一个函数，用于启动一个 transition。
+ *                                        它接收一个回调函数作为参数，这个回调函数中通常包含
+ *                                        会导致状态更新的操作。
+ */
+function mountTransition(): [boolean, (callback: () => void) => void] {
+	const [isPending, setPending] = mountState(false);
+	const hook = mountWorkInProgresHook();
+	const start = startTransition.bind(null, setPending);
+	hook.memoizedState = start;
+	return [isPending, start];
+}
+
+function updateTransition(): [boolean, (callback: () => void) => void] {
+	const [isPending] = updateState();
+	const hook = updateWorkInProgresHook();
+	const start = hook.memoizedState;
+	return [isPending as boolean, start];
+}
+
+/**
+ * @function startTransition
+ * @description 启动一个 transition 过程。
+ *              这个函数通常由 `useTransition` Hook 返回，并由用户调用。
+ *              它会：
+ *              1. 调用 `setPending(true)` 来将 `isPending` 状态设置为 `true`，
+ *                 表明一个 transition 已经开始。
+ *              2. 记录并设置全局的 `currentBatchConfig.transition` 为一个非 `null` 值（当前实现为 1），
+ *                 这使得在 `callback` 内部触发的状态更新（通过 `requestUpdateLane`）
+ *                 能够获取到 `TransitionLane` 优先级。
+ *              3. 同步执行用户传入的 `callback` 函数。这个回调函数中通常包含
+ *                 那些希望在 transition 过程中执行的状态更新操作（例如，调用 `setState`）。
+ *              4. 调用 `setPending(false)` 来将 `isPending` 状态设置为 `false`，
+ *                 表明 transition 已经（在同步执行完回调后）初步完成。
+ *                 注意：这并不意味着由回调触发的低优先级更新已经渲染完毕。
+ *              5. 恢复全局的 `currentBatchConfig.transition`到之前的值。
+ *
+ * @param {Dispatch<boolean>} setPending - 一个用于更新 `isPending` 状态的 dispatch 函数，
+ *                                         由 `useTransition` 内部的 `useState` 提供。
+ * @param {() => void} callback - 用户提供的回调函数，其中包含将作为 transition 一部分执行的逻辑，
+ *                                通常是状态更新。
+ */
+function startTransition(setPending: Dispatch<boolean>, callback: () => void) {
+	setPending(true);
+	const prevTransition = currentBatchConfig.transition;
+	currentBatchConfig.transition = 1;
+
+	callback();
+	setPending(false);
+
+	currentBatchConfig.transition = prevTransition;
 }
 
 /**

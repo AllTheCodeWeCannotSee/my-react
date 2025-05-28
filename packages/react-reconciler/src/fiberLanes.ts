@@ -1,3 +1,4 @@
+import ReactCurrentBatchConfig from 'react/src/currentBatchConfig';
 import {
 	unstable_getCurrentPriorityLevel,
 	unstable_IdlePriority,
@@ -10,12 +11,13 @@ import { FiberRootNode } from './fiber';
 export type Lane = number;
 export type Lanes = number;
 
-export const SyncLane = 0b0001;
-export const NoLane = 0b0000;
-export const NoLanes = 0b0000;
-export const InputContinuousLane = 0b0010;
-export const DefaultLane = 0b0100;
-export const IdleLane = 0b1000;
+export const SyncLane = 0b00001;
+export const NoLane = 0b00000;
+export const NoLanes = 0b00000;
+export const InputContinuousLane = 0b00010;
+export const DefaultLane = 0b00100;
+export const TransitionLane = 0b01000;
+export const IdleLane = 0b10000;
 
 /**
  * @description 将两个独立的优先级（Lane）合并成一个表示多个优先级的集合（Lanes）
@@ -30,9 +32,12 @@ export function mergeLanes(laneA: Lane, laneB: Lane): Lanes {
 /**
  * @function requestUpdateLane
  * @description 请求一个用于更新的优先级 Lane。
- *              它会从 Scheduler 包获取当前的调度优先级，
+ *              它首先检查当前是否处于一个 transition 过程中 (通过 `ReactCurrentBatchConfig.transition`)。
+ *              如果是，则返回 `TransitionLane`。
+ *              否则，它会从 Scheduler 包获取当前的调度优先级，
  *              然后将这个 Scheduler 优先级转换为 React 内部使用的 Lane。
  *              这个 Lane 代表了本次更新的紧急程度或类型。
+ *
  *
  * @returns {Lane} 根据当前 Scheduler 的优先级转换得到的 Lane。
  *                 如果 Scheduler 的优先级无法直接映射到一个已定义的 Lane，
@@ -41,6 +46,10 @@ export function mergeLanes(laneA: Lane, laneB: Lane): Lanes {
  * @see {@link unstable_getCurrentPriorityLevel} - Scheduler 包中用于获取当前调度优先级的函数。
  */
 export function requestUpdateLane() {
+	const isTransition = ReactCurrentBatchConfig.transition !== null;
+	if (isTransition) {
+		return TransitionLane;
+	}
 	// 从上下文环境中获取Scheduler优先级
 	const currentSchedulerPriority = unstable_getCurrentPriorityLevel();
 	const lane = schedulerPriorityToLane(currentSchedulerPriority);
