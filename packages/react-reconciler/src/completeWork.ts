@@ -1,3 +1,4 @@
+//
 import {
 	appendInitialChild,
 	Container,
@@ -33,7 +34,7 @@ function markUpdate(fiber: FiberNode) {
  */
 export const completeWork = (wip: FiberNode) => {
 	const newProps = wip.pendingProps;
-	// 2. 获取与当前 wip Fiber 对应的 current Fiber (上一次渲染的 Fiber 节点). 如果 current 为 null，表示这是一个全新的节点 (挂载阶段)
+	// 获取与当前 wip Fiber 对应的 current Fiber (上一次渲染的 Fiber 节点). 如果 current 为 null，表示这是一个全新的节点 (挂载阶段)
 	const current = wip.alternate;
 
 	switch (wip.tag) {
@@ -45,30 +46,18 @@ export const completeWork = (wip: FiberNode) => {
 				// className style
 				markUpdate(wip);
 			} else {
-				// 7. 挂载路径：如果是新节点
-				//    7a. 调用 hostConfig 中的 createInstance 函数，根据 wip.type (例如 "div")
-				//        创建一个真实的 DOM 元素实例。
+				// 如果是新节点
 				const instance = createInstance(wip.type, newProps);
-				//    7b. 调用 appendAllChildren 函数，将 wip 节点的所有子孙后代中
-				//        实际的 DOM 节点（或文本节点）附加到刚刚创建的 instance (父DOM元素) 上。
+
 				appendAllChildren(instance, wip);
-				//    7c. 将创建的真实 DOM 元素实例保存在当前 wip Fiber 节点的 stateNode 属性上。
 				wip.stateNode = instance;
 			}
-			// 8. 调用 bubbleProperties 函数，将子节点的副作用标记冒泡到当前节点的 subtreeFlags。
 			bubbleProperties(wip);
-			// 9. completeWork 通常返回 null，表示当前 Fiber 节点的工作已经完成，
-			//    协调器应该继续处理其兄弟节点或父节点。
 			return null;
 
-		// 10. 如果是宿主文本节点 (HostText)
 		case HostText:
-			// 11. 检查是否是更新过程且真实 DOM 文本节点已创建
 			if (current !== null && wip.stateNode) {
-				// 12. 更新路径：
-				//     12a. 获取旧的文本内容。
 				const oldText = current.memoizedProps?.content;
-				//     12b. 获取新的文本内容。
 				const newText = newProps.content;
 				//     12c. 如果文本内容发生了变化，就调用 markUpdate 标记该 Fiber 节点，
 				//          以便在提交阶段更新真实 DOM 文本节点的内容。
@@ -83,9 +72,7 @@ export const completeWork = (wip: FiberNode) => {
 				//     13b. 将创建的文本节点实例保存在 stateNode 上。
 				wip.stateNode = instance;
 			}
-			// 14. 冒泡子节点的副作用标记 (对于文本节点，通常没有子节点，但保持一致性)
 			bubbleProperties(wip);
-			// 15. 返回 null
 			return null;
 
 		case HostRoot:
@@ -94,13 +81,11 @@ export const completeWork = (wip: FiberNode) => {
 			bubbleProperties(wip);
 			return null;
 
-		// 22. 如果遇到未处理的 Fiber 类型
+		// 如果遇到未处理的 Fiber 类型
 		default:
-			// 23. 并且在开发环境 (__DEV__) 下，会打印一个警告。
 			if (__DEV__) {
 				console.warn('未处理的completeWork情况', wip);
 			}
-			// 24. 结束 switch 语句的这个 case
 			break;
 	}
 };
@@ -113,38 +98,22 @@ export const completeWork = (wip: FiberNode) => {
  * @param wip 该DOM元素对应的fiber-node
  */
 function appendAllChildren(parent: Container | Instance, wip: FiberNode) {
-	// 1. 从 wip (当前父 Fiber 节点) 的第一个子 Fiber 节点开始遍历
 	// node 作为遍历的指针
 	let node = wip.child;
 
-	// 2. 持续循环，直到 wip 的所有子孙节点都被处理完毕
 	while (node !== null) {
-		// 3. 检查当前遍历到的 node 是否是宿主组件 (HostComponent) 或宿主文本节点 (HostText)
 		if (node.tag === HostComponent || node.tag === HostText) {
-			// 4. 如果是，说明这个 node 对应一个真实的 DOM 元素或文本节点 (存储在 node.stateNode 中)
-			//    调用 appendInitialChild 函数 (来自 hostConfig)，
-			//    将这个真实的 DOM 节点 (node.stateNode) 添加为 parent (父 DOM 元素) 的子节点。
-			//    node?.stateNode 使用了可选链，以防 stateNode 意外为 null (虽然理论上此时不应为 null)。
+			// 如果是，说明这个 node 对应一个真实的 DOM 元素或文本节点 (存储在 node.stateNode 中)
 			appendInitialChild(parent, node?.stateNode);
 		} else if (node.child !== null) {
-			// 5. 如果当前 node 不是直接的宿主节点 (例如，它可能是一个
-			// )，
-			//    并且它拥有自己的子节点 (node.child !== null)，
-			//    这意味着我们需要更深入地遍历这个 node 的子树，以找到可附加的真实 DOM 节点。
-			// 6. 确保这个更深层子节点的 return 指针指向其直接父 Fiber (node)。
-			//    这有助于维护 Fiber 树结构的正确性。
 			node.child.return = node;
-
-			// 7. 将 node 指向其子节点，实现向下遍历。
+			// 将 node 指向其子节点，实现向下遍历。
 			node = node.child;
-
-			// 8. 使用 continue 跳过本次循环的后续部分 (兄弟节点和回溯逻辑)，
-			//    直接从这个更深层的子节点开始新一轮的循环。
 			continue;
 		}
 
-		// 9. 这是一个安全检查或终止条件。如果 node 意外地变回了最初的 wip 父节点，
-		//    说明遍历可能出现了问题或已经完成，此时函数返回。
+		// 这是一个安全检查或终止条件。如果 node 意外地变回了最初的 wip 父节点，
+		// 说明遍历可能出现了问题或已经完成，此时函数返回。
 		if (node === wip) {
 			return;
 		}
@@ -167,7 +136,6 @@ function appendAllChildren(parent: Container | Instance, wip: FiberNode) {
 		// 13. 当从内部循环（步骤 10-12）跳出时，说明当前 node 找到了一个兄弟节点。
 		//     确保这个兄弟节点的 return 指针指向正确的父节点 (node.return，即当前回溯到的父节点)。
 		node.sibling.return = node.return;
-		// 14. 将 node 指向其兄弟 Fiber 节点，以便在下一次主循环 (步骤 2) 中处理这个兄弟分支。
 		node = node.sibling;
 	}
 }
@@ -176,31 +144,18 @@ function appendAllChildren(parent: Container | Instance, wip: FiberNode) {
  * @description 它把所有这些从子孙节点收集到的标记信息，汇总起来，然后统一记录在当前 wip 节点的 subtreeFlags 属性上
  */
 function bubbleProperties(wip: FiberNode) {
-	let subtreeFlags = NoFlags; // 1. 初始化一个变量，用来累积所有子孙节点的副作用标记
-	let child = wip.child; // 2. 从 wip (当前工作中的父 Fiber 节点) 的第一个子 Fiber 节点开始
+	let subtreeFlags = NoFlags;
+	let child = wip.child;
 
-	// 3. 遍历 wip 节点的所有直接子节点
 	while (child !== null) {
-		// 4. 将子节点自身的 subtreeFlags (代表子节点的整个子树中存在的副作用)
-		//    合并到父节点的 subtreeFlags 累积变量中
 		subtreeFlags |= child.subtreeFlags;
-
-		// 5. 将子节点自身的 flags (代表子节点本身需要执行的副作用)
-		//    也合并到父节点的 subtreeFlags 累积变量中
-		//    因为子节点自身的副作用也是其父节点子树中的一部分需要关注的变更
 		subtreeFlags |= child.flags;
 
-		// 6. 确保子节点的 return 指针正确地指向 wip (当前父节点)
-		//    这一步主要是为了维护 Fiber 树结构的正确性，
-		//    尽管在其他地方可能已经设置过，但这里可以作为一种保障。
+		// 确保子节点的 return 指针正确地指向 wip (当前父节点)
+		// 这一步主要是为了维护 Fiber 树结构的正确性，
+		// 尽管在其他地方可能已经设置过，但这里可以作为一种保障。
 		child.return = wip;
-
-		// 7. 移动到下一个兄弟节点，继续循环
 		child = child.sibling;
 	}
-
-	// 8. 最后，将累积到的所有子孙节点的副作用标记 (subtreeFlags)
-	//    合并到 wip 节点自身的 subtreeFlags 属性上。
-	//    这样，wip.subtreeFlags 就包含了它所有子孙节点中存在的全部副作用标记。
 	wip.subtreeFlags |= subtreeFlags;
 }

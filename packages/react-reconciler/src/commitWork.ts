@@ -29,108 +29,109 @@ import { HookHasEffect } from './hookEffectTags';
 let nextEffect: FiberNode | null = null;
 
 /**
- * @description 遍历这棵 finishedWork Fiber 树，并执行所有与 DOM 结构变更相关的副作用
- * * Placement (插入)：将新的 DOM 节点添加到页面上。
- * * Update (更新)：修改现有 DOM 节点的属性或文本内容。
- * * ChildDeletion (子节点删除)：从 DOM 中移除不再需要的节点
- * @param finishedWork
- * @param root
+ * @function commitMutationEffects
+ * @description 遍历 "finishedWork" Fiber 树（代表已完成的渲染工作），并执行所有与 DOM 结构变更相关的副作用。
+ *              这些副作用包括：
+ *              - Placement (插入)：将新的 DOM 节点添加到页面上。
+ *              - Update (更新)：修改现有 DOM 节点的属性或文本内容。
+ *              - ChildDeletion (子节点删除)：从 DOM 中移除不再需要的节点。
+ *              - PassiveEffect (被动副作用)：收集函数组件中由 `useEffect` 产生的回调，
+ *                这些回调将在稍后的 `flushPassiveEffects` 阶段执行。
+ *
+ *              此函数采用深度优先的遍历策略：
+ *              1. 它首先尝试向下遍历到子节点。
+ *              2. 如果一个节点没有子节点，或者其子树中没有需要处理的“变更类”或“被动类”副作用，
+ *                 则会处理该节点自身的副作用。
+ *              3. 处理完当前节点后，尝试移动到其兄弟节点。
+ *              4. 如果没有兄弟节点，则向上回溯到父节点，并处理父节点的副作用。
+ *              这个过程会持续进行，直到遍历并处理完 `finishedWork` 树中所有带有相关副作用标记的节点。
+ *
+ * @param {FiberNode} finishedWork - 已经完成工作的 Fiber 树的根节点 (work-in-progress 树)。
+ *                                   这个树包含了所有需要应用的变更信息。
+ * @param {FiberRootNode} root - FiberRootNode 实例，代表整个应用的根。
+ *                               它用于在处理副作用时（例如收集被动副作用）访问全局信息。
  */
 export const commitMutationEffects = (
 	finishedWork: FiberNode,
 	root: FiberRootNode
 ) => {
-	// 1. 初始化一个全局（或模块作用域）变量 nextEffect，
-	//    将其指向传入的 finishedWork (通常是完成了协调工作的 Fiber 树的根节点，或者某个子树的根)。
-	//    nextEffect 将作为遍历 Fiber 树以执行副作用的游标。
+	//nextEffect 将作为遍历 Fiber 树以执行副作用的游标。
 	nextEffect = finishedWork;
 
-	// 2. 开始一个循环，只要 nextEffect 不为 null，就继续遍历。
 	while (nextEffect !== null) {
-		// 3. "向下遍历" 逻辑：
-		//    获取当前 nextEffect 节点的第一个子节点。
+		// 向下遍历
 		const child: FiberNode | null = nextEffect.child;
 
-		// 4. 检查当前 nextEffect 节点的子树中是否存在“变更类”副作用，并且它有子节点。
-		//    (nextEffect.subtreeFlags & MutationMask) !== NoFlags:
-		//        - nextEffect.subtreeFlags 记录了该节点整个子树中所有副作用的标记。
-		//        - MutationMask 是一个掩码，包含了所有变更类副作用的标记 (如 Placement, Update, ChildDeletion)。
-		//        - 这个条件判断 nextEffect 的子树中是否包含任何需要执行的 DOM 变更操作。
-		//    child !== null: 确保有子节点可以向下遍历。
+		// 检查当前 nextEffect 节点的子树中是否存在“变更类”副作用，并且它有子节点。
 		if (
 			(nextEffect.subtreeFlags & (MutationMask | PassiveMask)) !== NoFlags &&
 			child !== null
 		) {
-			// 5. 如果子树中有变更，并且有子节点，则将 nextEffect 指向其第一个子节点，
-			//    实现向下深入遍历。
+			// 如果子树中有变更，并且有子节点，则将 nextEffect 指向其第一个子节点，
 			nextEffect = child;
 		} else {
-			// 6. "向上遍历 DFS" (深度优先搜索的回溯阶段) 逻辑：
-			//    如果当前节点的子树没有变更，或者当前节点没有子节点，
-			//    就需要处理当前节点自身的副作用，然后尝试移动到兄弟节点或向上回溯。
+			// 向上遍历
 			up: while (nextEffect !== null) {
-				// 7. 对当前的 nextEffect 节点执行其自身的变更类副作用。
-				//    commitMutaitonEffectsOnFiber 函数会检查 nextEffect.flags，
-				//    并执行相应的 Placement, Update, 或 ChildDeletion 操作。
 				commitMutaitonEffectsOnFiber(nextEffect, root);
 
-				// 8. 获取当前 nextEffect 节点的兄弟节点。
 				const sibling: FiberNode | null = nextEffect.sibling;
-
-				// 9. 如果存在兄弟节点
 				if (sibling !== null) {
-					// 10. 将 nextEffect 指向兄弟节点，
-					//     以便在下一次外层 while 循环中开始处理这个兄弟分支。
+					// 游标指向兄弟节点
 					nextEffect = sibling;
-
-					// 11. 使用 break up; 跳出内部的 'up' 标签的 while 循环，
-					//     回到外层 while (nextEffect !== null) 继续。
 					break up;
 				}
-				// 12. 如果没有兄弟节点，将 nextEffect 指向其父节点 (nextEffect.return)，
-				//     实现向上回溯。内部的 'up' while 循环会继续，
-				//     在父节点上执行 commitMutaitonEffectsOnFiber，然后再检查父节点的兄弟节点。
 				nextEffect = nextEffect.return;
 			}
-			// 13. 当内部的 'up' while 循环因为 nextEffect 最终变为 null (回溯到树顶并处理完毕)
-			//     而自然结束时，外层的 while (nextEffect !== null) 也会终止。
 		}
 	}
 };
 
 /**
- * @description 针对单个 Fiber 节点来执行其身上标记的“变更类”副作用（Mutation Effects）。“变更类”副作用指的是那些会直接修改 DOM 结构的操作，比如插入新节点、更新现有节点、删除节点。
- * @param finishedWork 当前有flags的节点
+ * @function commitMutaitonEffectsOnFiber
+ * @description 针对单个 Fiber 节点来执行其身上标记的“变更类”副作用（Mutation Effects）
+ *              以及收集被动副作用（Passive Effects）。
+ *              “变更类”副作用指的是那些会直接修改 DOM 结构的操作，比如插入新节点（Placement）、
+ *              更新现有节点（Update）、删除节点（ChildDeletion）。
+ *              被动副作用指的是由 `useEffect` 产生的回调，它们会被收集起来稍后执行。
+ *
+ *              此函数会检查 `finishedWork` 节点的 `flags` 属性，并根据不同的标记执行相应的操作：
+ *              - **Placement**: 调用 `commitPlacement` 执行 DOM 插入。
+ *              - **Update**: 调用 `hostConfig.commitUpdate` 执行 DOM 属性或文本内容的更新。
+ *              - **ChildDeletion**: 遍历 `finishedWork.deletions` 数组，对每个需要删除的子节点
+ *                调用 `commitDeletion` 来执行实际的 DOM 移除和相关的清理工作。
+ *              - **PassiveEffect**: 调用 `commitPassiveEffect` 来收集 `useEffect` 的回调，
+ *                以便在 `flushPassiveEffects` 阶段执行。
+ *
+ *              每处理完一种副作用后，会从 `finishedWork.flags` 中移除对应的标记，
+ *              以防止重复执行。
+ *
+ * @param {FiberNode} finishedWork - 当前正在处理的、已经完成工作的 Fiber 节点。
+ *                                   它的 `flags` 属性可能包含上述一种或多种副作用标记。
+ * @param {FiberRootNode} root - FiberRootNode 实例，代表整个应用的根。
+ *                               在处理某些副作用（如收集被动副作用或执行删除）时需要用到。
  */
 const commitMutaitonEffectsOnFiber = (
 	finishedWork: FiberNode,
 	root: FiberRootNode
 ) => {
-	// 1. 获取当前 finishedWork Fiber 节点的副作用标记 (flags)
 	const flags = finishedWork.flags;
 
-	// 2. 检查是否包含 Placement (放置/插入) 标记
-	//    (flags & Placement) !== NoFlags 表示 flags 中存在 Placement 位
+	// 检查是否包含 Placement (放置/插入) 标记
 	if ((flags & Placement) !== NoFlags) {
-		// 3. 如果有 Placement 标记，调用 commitPlacement 函数来执行 DOM 插入操作
 		commitPlacement(finishedWork);
 
-		// 4. 执行完 Placement 操作后，从 finishedWork.flags 中移除 Placement 标记
-		//    finishedWork.flags &= ~Placement; (按位与上 Placement 的反码)
-		//    这样做是为了防止在后续的遍历或处理中重复执行该副作用。
+		// 移除 Placement 标记
 		finishedWork.flags &= ~Placement;
 	}
 
-	// 5. 检查是否包含 Update (更新) 标记
+	// 检查是否包含 Update (更新) 标记
 	if ((flags & Update) !== NoFlags) {
-		// 6. 如果有 Update 标记，调用 commitUpdate 函数 (来自 hostConfig)
-		//    来执行 DOM 元素的属性更新或文本节点的文本内容更新。
 		commitUpdate(finishedWork);
-		// 7. 执行完 Update 操作后，移除 Update 标记。
+		// 移除 Update 标记。
 		finishedWork.flags &= ~Update;
 	}
 
-	// 8. 检查是否包含 ChildDeletion (子节点删除) 标记
+	// 检查是否包含 ChildDeletion (子节点删除) 标记
 	if ((flags & ChildDeletion) !== NoFlags) {
 		const deletions = finishedWork.deletions;
 		if (deletions !== null) {
@@ -138,22 +139,35 @@ const commitMutaitonEffectsOnFiber = (
 				commitDeletion(childToDelete, root);
 			});
 		}
+		// 移除 ChildDeletion 标记
 		finishedWork.flags &= ~ChildDeletion;
 	}
 
+	// 检查是否包含 PassiveEffect (effect) 标记
 	if ((flags & PassiveEffect) !== NoFlags) {
 		// 收集回调
 		commitPassiveEffect(finishedWork, root, 'update');
+		// 移除 PassiveEffect 标记
 		finishedWork.flags &= ~PassiveEffect;
 	}
 };
 
 /**
+ * @function commitPassiveEffect
  * @description 收集函数组件中需要执行的被动副作用 (useEffect)，
  *              并将它们添加到 FiberRootNode 的 pendingPassiveEffects 队列中。
- * @param fiber 当前正在处理的 Fiber 节点。
- * @param root FiberRootNode，代表整个应用的根。
- * @param type 'update' 或 'unmount'，指示当前是处理更新时的副作用还是卸载时的副作用。
+ *              这个函数在 commit 阶段的 "mutation" 子阶段被调用，
+ *              它本身不执行 useEffect 的回调，而是将 Effect 对象收集起来，
+ *              以便在稍后的 `flushPassiveEffects` 阶段统一执行。
+ *
+ * @param {FiberNode} fiber - 当前正在处理的 Fiber 节点。
+ *                            只有当它是 FunctionComponent 类型，并且在更新时带有 PassiveEffect 标记时，
+ *                            才会处理其副作用。
+ * @param {FiberRootNode} root - FiberRootNode 实例，代表整个应用的根。
+ *                               `pendingPassiveEffects` 队列就存储在这个对象上。
+ * @param {'update' | 'unmount'} type - 指示当前是处理更新时的副作用还是卸载时的副作用。
+ *                                      - 'update': 表示组件正在更新或首次挂载，需要收集创建回调。
+ *                                      - 'unmount': 表示组件正在卸载，需要收集销毁回调。
  */
 function commitPassiveEffect(
 	fiber: FiberNode,
@@ -411,8 +425,17 @@ function commitNestedComponent(
 }
 
 /**
- * @description 专门用来处理带有 Placement 标记的 Fiber 节点的
- * @param finishedWork
+ * @function commitPlacement
+ * @description 负责处理带有 `Placement` 标记的 Fiber 节点的 DOM 插入操作。
+ *              它会找到该 Fiber 节点在 DOM 树中正确的父节点和兄弟节点（如果存在），
+ *              然后调用 `insertOrAppendPlacementNodeIntoContainer` 函数将该 Fiber 节点
+ *              对应的真实 DOM 内容插入到父 DOM 容器中。
+ *
+ * @param {FiberNode} finishedWork - 带有 `Placement` 标记的、已经完成工作的 Fiber 节点。
+ *                                   这个 Fiber 节点及其子树代表了需要被插入到 DOM 中的新内容。
+ * @see {@link getHostParent} - 用于查找 Fiber 节点对应的真实 DOM 父节点。
+ * @see {@link getHostSibling} - 用于查找 Fiber 节点对应的真实 DOM 兄弟节点，用于确定插入位置。
+ * @see {@link insertOrAppendPlacementNodeIntoContainer} - 实际执行 DOM 插入或追加操作的函数。
  */
 const commitPlacement = (finishedWork: FiberNode) => {
 	if (__DEV__) {
@@ -514,12 +537,27 @@ function getHostParent(fiber: FiberNode): Container | null {
 }
 
 /**
+ * @function insertOrAppendPlacementNodeIntoContainer
+ * @description 将一个指定的 Fiber 节点（`finishedWork`）所代表的真实 DOM 内容，
+ *              插入或追加到一个指定的父 DOM 容器（`hostParent`）中。
+ *              如果提供了 `before` 参数（一个兄弟 DOM 实例），则会将 `finishedWork` 的 DOM 内容
+ *              插入到 `before` 节点之前；否则，会将其追加到 `hostParent` 的末尾。
  *
- * @description 将一个指定的 Fiber 节点（finishedWork）所代表的真实 DOM 内容，追加到一个指定的父 DOM 容器（hostParent）中
- * @param finishedWork 需要被放置的 Fiber 节点
- * @param hostParent 目标父 DOM 容器
- * @returns
+ *              此函数会递归处理 `finishedWork`：
+ *              - 如果 `finishedWork` 本身是一个可以直接渲染到 DOM 的类型（如 `HostComponent` 或 `HostText`），
+ *                则直接将其 `stateNode` (真实 DOM 节点) 插入或追加到 `hostParent`。
+ *              - 如果 `finishedWork` 是一个组件类型（如 `FunctionComponent`），它本身不对应 DOM 节点，
+ *                则会递归地对其子节点调用此函数，将子节点渲染的真实 DOM 内容插入或追加到 `hostParent`。
+ *
+ * @param {FiberNode} finishedWork - 需要被放置（插入或追加）的 Fiber 节点。
+ *                                   它的 `stateNode` 属性（如果是宿主类型）或其子孙节点的 `stateNode`
+ *                                   将是实际被操作的 DOM 内容。
+ * @param {Container} hostParent - 目标父 DOM 容器，`finishedWork` 的内容将被添加到这里。
+ * @param {Instance} [before] - (可选) 一个兄弟 DOM 实例。如果提供此参数，
+ *                              `finishedWork` 的 DOM 内容将被插入到这个 `before` 节点之前。
+ *                              如果未提供，则 `finishedWork` 的内容将被追加到 `hostParent` 的末尾。
  */
+
 function insertOrAppendPlacementNodeIntoContainer(
 	finishedWork: FiberNode, // 参数 finishedWork：代表需要被“放置”到 DOM 中的 Fiber 节点
 	hostParent: Container, // 参数 hostParent：这个 Fiber 节点应该被添加到的父级真实 DOM 容器
