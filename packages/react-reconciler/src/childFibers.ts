@@ -372,14 +372,9 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 				reconcileSingleTextNode(returnFiber, currentFiber, newChild)
 			);
 		}
-		if (currentFiber !== null) {
-			// 兜底删除
-			deleteRemainingChildren(returnFiber, currentFiber);
-		}
 
-		if (__DEV__) {
-			console.warn('未实现的reconcile类型', newChild);
-		}
+		deleteRemainingChildren(returnFiber, currentFiber);
+
 		return null;
 	};
 }

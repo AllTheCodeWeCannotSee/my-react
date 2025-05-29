@@ -3,7 +3,8 @@ import {
 	commitHookEffectListCreate,
 	commitHookEffectListDestroy,
 	commitHookEffectListUnmount,
-	commitMutationEffects
+	commitMutationEffects,
+	commitLayoutEffects
 } from './commitWork';
 import { completeWork } from './completeWork';
 import {
@@ -341,34 +342,6 @@ function renderRoot(root: FiberRootNode, lane: Lane, shouldTimeSlice: boolean) {
 	return RootCompleted;
 }
 
-/**
- * @function commitRoot
- * @description Commit 阶段的入口函数。它负责将 "render" 阶段构建好的
- *              work-in-progress Fiber 树（存储在 `root.finishedWork`）
- *              的变更应用到实际的 DOM 上，并执行相关的副作用（如 `useEffect`）。
- *
- *              主要流程包括：
- *              1. 检查 `finishedWork` 是否存在，如果不存在则直接返回。
- *              2. 重置 `root` 上的 `finishedWork` 和 `finishedLane`。
- *              3. 调用 `markRootFinished` 从 `pendingLanes` 中移除已完成的 lane。
- *              4. 检查 `finishedWork` 的 `flags` 和 `subtreeFlags` 是否包含 `PassiveMask`，
- *                 如果包含并且之前没有调度过被动副作用，则会使用 `scheduler` 调度 `flushPassiveEffects`
- *                 在稍后执行。
- *              5. 检查 `finishedWork` 的 `flags` 和 `subtreeFlags` 是否包含 `MutationMask` 或 `PassiveMask`，
- *                 以判断是否有实际的 DOM 变更或被动副作用需要处理。
- *              6. 如果有变更或被动副作用：
- *                 a. 执行 `commitMutationEffects` 来处理 DOM 的插入、更新、删除等操作。
- *                 b. 将 `root.current` 指针切换到 `finishedWork`，使其成为新的 current 树。
- *                 c. (Layout effects 阶段，当前代码中未显式实现，但在标准 React 中存在)
- *              7. 如果没有变更或被动副作用，直接将 `root.current` 指针切换到 `finishedWork`。
- *              8. 重置 `rootDoesHasPassiveEffects` 标志。
- *              9. 调用 `ensureRootIsScheduled` 来检查在 commit 阶段（例如在 `useEffect` 的清理或创建函数中）
- *                 是否触发了新的更新，并进行相应的调度。
- *
- * @param {FiberRootNode} root - FiberRootNode 实例，代表整个应用的根。
- *                               它持有 `finishedWork` (已完成的 WIP 树)
- *                               和 `pendingPassiveEffects` (待处理的被动副作用) 等重要信息。
- */
 function commitRoot(root: FiberRootNode) {
 	const finishedWork = root.finishedWork;
 
@@ -417,13 +390,15 @@ function commitRoot(root: FiberRootNode) {
 		(finishedWork.flags & (MutationMask | PassiveMask)) !== NoFlags;
 
 	if (subtreeHasEffect || rootHasEffect) {
-		// beforeMutation
-		// mutation Placement
+		// 阶段1/3: beforeMutation
+		// 阶段2/3: mutation Placement
 		commitMutationEffects(finishedWork, root);
 
+		// fiber 树的切换
 		root.current = finishedWork;
 
-		// layout
+		// 阶段3/3: layout
+		commitLayoutEffects(finishedWork, root);
 	} else {
 		root.current = finishedWork;
 	}

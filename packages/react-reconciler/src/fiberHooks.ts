@@ -107,14 +107,55 @@ export function renderWithHooks(wip: FiberNode, lane: Lane) {
 const HooksDispatcherOnMount: Dispatcher = {
 	useState: mountState,
 	useEffect: mountEffect,
-	useTransition: mountTransition
+	useTransition: mountTransition,
+	useRef: mountRef
 };
 
 const HooksDispatcherOnUpdate: Dispatcher = {
 	useState: updateState,
 	useEffect: updateEffect,
-	useTransition: updateTransition
+	useTransition: updateTransition,
+	useRef: updateRef
 };
+
+/**
+ * @function mountRef
+ * @description `useRef` Hook 在组件首次挂载时的实现。
+ *              它会创建一个新的 Hook 对象，并初始化一个 ref 对象
+ *              （形如 `{ current: initialValue }`）。
+ *              这个 ref 对象会被存储在当前 Hook 对象的 `memoizedState` 中，
+ *              并在后续的渲染中保持引用稳定。
+ *
+ * @template T - ref 对象中 `current` 属性值的类型。
+ * @param {T} initialValue - ref 对象 `current` 属性的初始值。
+ * @returns {{ current: T }} 返回创建的 ref 对象。
+ *                           这个对象的 `current` 属性可以被用户读取和修改，
+ *                           并且在组件的整个生命周期内保持同一个引用。
+ */
+function mountRef<T>(initialValue: T): { current: T } {
+	const hook = mountWorkInProgressHook();
+	const ref = { current: initialValue };
+	hook.memoizedState = ref;
+	return ref;
+}
+
+/**
+ * @function updateRef
+ * @description `useRef` Hook 在组件更新阶段的实现。
+ *              它会从上一次渲染的 Hook 状态中获取之前创建的 ref 对象
+ *              （存储在 `memoizedState` 中）。
+ *              由于 ref 对象的引用在组件的整个生命周期内都应该是稳定的，
+ *              此函数仅返回上一次渲染时创建的同一个 ref 对象。
+ *
+ * @template T - ref 对象中 `current` 属性值的类型。
+ * @param {T} initialValue - (未使用) 在更新阶段，`useRef` 的参数 `initialValue` 会被忽略。
+ *                            ref 的值仅在首次挂载时被初始化。
+ * @returns {{ current: T }} 返回上一次渲染时创建的 ref 对象。
+ */
+function updateRef<T>(initialValue: T): { current: T } {
+	const hook = updateWorkInProgressHook();
+	return hook.memoizedState;
+}
 
 /**
  * @description useEffect Hook 在组件首次挂载时的实现
@@ -123,7 +164,7 @@ const HooksDispatcherOnUpdate: Dispatcher = {
  */
 function mountEffect(create: EffectCallback | void, deps: EffectDeps | void) {
 	// 获取这次 useEffect 调用的 Hook 对象
-	const hook = mountWorkInProgresHook();
+	const hook = mountWorkInProgressHook();
 	const nextDeps = deps === undefined ? null : deps;
 
 	// 在当前正在渲染的 FiberNode 上打上 PassiveEffect
@@ -154,7 +195,7 @@ function mountEffect(create: EffectCallback | void, deps: EffectDeps | void) {
  * @param {EffectDeps | void} deps - 用户传入的 `useEffect` 的第二个参数，即依赖项数组 (可选)。
  */
 function updateEffect(create: EffectCallback | void, deps: EffectDeps | void) {
-	const hook = updateWorkInProgresHook();
+	const hook = updateWorkInProgressHook();
 	const nextDeps = deps === undefined ? null : deps;
 	let destroy: EffectCallback | void;
 
@@ -267,7 +308,7 @@ function createFCUpdateQueue<State>() {
  */
 function updateState<State>(): [State, Dispatch<State>] {
 	// 找到当前useState对应的hook数据
-	const hook = updateWorkInProgresHook();
+	const hook = updateWorkInProgressHook();
 
 	// 计算新state的逻辑
 	const queue = hook.updateQueue as UpdateQueue<State>;
@@ -325,7 +366,7 @@ function updateState<State>(): [State, Dispatch<State>] {
  * 	* render阶段 （TODO）
  * @returns
  */
-function updateWorkInProgresHook(): Hook {
+function updateWorkInProgressHook(): Hook {
 	// TODO render阶段触发的更新 (这个注释可能指未来需要处理在渲染阶段直接触发更新的复杂情况)
 	let nextCurrentHook: Hook | null; // 用来存储从上一次渲染的 Hook 链表中找到的、与当前 Hook 调用对应的那个 Hook 对象
 
@@ -342,12 +383,12 @@ function updateWorkInProgresHook(): Hook {
 			nextCurrentHook = current?.memoizedState; // 函数组件的 Fiber 节点的 `memoizedState` 属性指向其 Hook 链表的头节点。
 			// 所以，这里获取的是上一次渲染时该组件的第一个 Hook 对象。
 		} else {
-			// mount (理论上这个分支不应该在 updateWorkInProgresHook 中被走到)
+			// mount (理论上这个分支不应该在 updateWorkInProgressHook 中被走到)
 			// 因为 `renderWithHooks` 函数在 `current === null` (mount 阶段) 时，
 			// 会将 `currentDispatcher.current` 设置为 `HooksDispatcherOnMount`，
-			// 从而调用 `mountState` 和 `mountWorkInProgresHook`。
+			// 从而调用 `mountState` 和 `mountWorkInProgressHook`。
 			// 如果 `current !== null` (update 阶段)，才会设置为 `HooksDispatcherOnUpdate`，
-			// 进而调用 `updateState` 和 `updateWorkInProgresHook`。
+			// 进而调用 `updateState` 和 `updateWorkInProgressHook`。
 			// 所以，如果在这里 `current` 为 `null`，可能表示逻辑上的一个问题或未覆盖的边界情况。
 			// 但基于 `renderWithHooks` 的逻辑，`current` 在这里应该总是不为 `null`。
 			nextCurrentHook = null;
@@ -410,10 +451,10 @@ function mountState<State>(
 	initialState: (() => State) | State // 初始状态值，或者一个计算初始状态的函数
 ): [State, Dispatch<State>] {
 	// 1. 获取或创建专属于这次 useState 调用的 Hook 对象。
-	//    `mountWorkInProgresHook` 函数会确保我们为这个组件的 Hook 链表
+	//    `mountWorkInProgressHook` 函数会确保我们为这个组件的 Hook 链表
 	//    准备好一个“坑位”（一个 Hook 对象）。这个“坑位”会用来存放
 	//    *当前这次* useState 调用所需的状态和更新队列。
-	const hook = mountWorkInProgresHook();
+	const hook = mountWorkInProgressHook();
 
 	let memoizedState;
 	if (initialState instanceof Function) {
@@ -461,7 +502,7 @@ function mountState<State>(
  */
 function mountTransition(): [boolean, (callback: () => void) => void] {
 	const [isPending, setPending] = mountState(false);
-	const hook = mountWorkInProgresHook();
+	const hook = mountWorkInProgressHook();
 	const start = startTransition.bind(null, setPending);
 	hook.memoizedState = start;
 	return [isPending, start];
@@ -469,7 +510,7 @@ function mountTransition(): [boolean, (callback: () => void) => void] {
 
 function updateTransition(): [boolean, (callback: () => void) => void] {
 	const [isPending] = updateState();
-	const hook = updateWorkInProgresHook();
+	const hook = updateWorkInProgressHook();
 	const start = hook.memoizedState;
 	return [isPending as boolean, start];
 }
@@ -532,7 +573,7 @@ function dispatchSetState<State>(
  * @description 在函数组件的初始挂载阶段，创建一个 Hook 对象，并插入到链表中
  * @returns 返回新创建并链接好的 Hook 对象（空的）。
  */
-function mountWorkInProgresHook(): Hook {
+function mountWorkInProgressHook(): Hook {
 	const hook: Hook = {
 		memoizedState: null,
 		updateQueue: null,

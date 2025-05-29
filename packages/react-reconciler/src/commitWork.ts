@@ -10,12 +10,14 @@ import { FiberNode, FiberRootNode, PendingPassiveEffects } from './fiber';
 import {
 	ChildDeletion,
 	Flags,
+	LayoutMask,
 	MutationMask,
 	NoFlags,
 	PassiveEffect,
 	PassiveMask,
 	Placement,
-	Update
+	Update,
+	Ref
 } from './fiberFlags';
 import {
 	FunctionComponent,
@@ -28,93 +30,42 @@ import { HookHasEffect } from './hookEffectTags';
 
 let nextEffect: FiberNode | null = null;
 
-/**
- * @function commitMutationEffects
- * @description 遍历 "finishedWork" Fiber 树（代表已完成的渲染工作），并执行所有与 DOM 结构变更相关的副作用。
- *              这些副作用包括：
- *              - Placement (插入)：将新的 DOM 节点添加到页面上。
- *              - Update (更新)：修改现有 DOM 节点的属性或文本内容。
- *              - ChildDeletion (子节点删除)：从 DOM 中移除不再需要的节点。
- *              - PassiveEffect (被动副作用)：收集函数组件中由 `useEffect` 产生的回调，
- *                这些回调将在稍后的 `flushPassiveEffects` 阶段执行。
- *
- *              此函数采用深度优先的遍历策略：
- *              1. 它首先尝试向下遍历到子节点。
- *              2. 如果一个节点没有子节点，或者其子树中没有需要处理的“变更类”或“被动类”副作用，
- *                 则会处理该节点自身的副作用。
- *              3. 处理完当前节点后，尝试移动到其兄弟节点。
- *              4. 如果没有兄弟节点，则向上回溯到父节点，并处理父节点的副作用。
- *              这个过程会持续进行，直到遍历并处理完 `finishedWork` 树中所有带有相关副作用标记的节点。
- *
- * @param {FiberNode} finishedWork - 已经完成工作的 Fiber 树的根节点 (work-in-progress 树)。
- *                                   这个树包含了所有需要应用的变更信息。
- * @param {FiberRootNode} root - FiberRootNode 实例，代表整个应用的根。
- *                               它用于在处理副作用时（例如收集被动副作用）访问全局信息。
- */
-export const commitMutationEffects = (
-	finishedWork: FiberNode,
-	root: FiberRootNode
+export const commitEffects = (
+	phrase: 'mutation' | 'layout',
+	mask: Flags,
+	callback: (fiber: FiberNode, root: FiberRootNode) => void
 ) => {
-	//nextEffect 将作为遍历 Fiber 树以执行副作用的游标。
-	nextEffect = finishedWork;
+	return (finishedWork: FiberNode, root: FiberRootNode) => {
+		nextEffect = finishedWork;
 
-	while (nextEffect !== null) {
-		// 向下遍历
-		const child: FiberNode | null = nextEffect.child;
+		while (nextEffect !== null) {
+			// 向下遍历
+			const child: FiberNode | null = nextEffect.child;
 
-		// 检查当前 nextEffect 节点的子树中是否存在“变更类”副作用，并且它有子节点。
-		if (
-			(nextEffect.subtreeFlags & (MutationMask | PassiveMask)) !== NoFlags &&
-			child !== null
-		) {
-			// 如果子树中有变更，并且有子节点，则将 nextEffect 指向其第一个子节点，
-			nextEffect = child;
-		} else {
-			// 向上遍历
-			up: while (nextEffect !== null) {
-				commitMutaitonEffectsOnFiber(nextEffect, root);
+			if ((nextEffect.subtreeFlags & mask) !== NoFlags && child !== null) {
+				nextEffect = child;
+			} else {
+				// 向上遍历
+				up: while (nextEffect !== null) {
+					callback(nextEffect, root);
+					const sibling: FiberNode | null = nextEffect.sibling;
 
-				const sibling: FiberNode | null = nextEffect.sibling;
-				if (sibling !== null) {
-					// 游标指向兄弟节点
-					nextEffect = sibling;
-					break up;
+					if (sibling !== null) {
+						nextEffect = sibling;
+						break up;
+					}
+					nextEffect = nextEffect.return;
 				}
-				nextEffect = nextEffect.return;
 			}
 		}
-	}
+	};
 };
 
-/**
- * @function commitMutaitonEffectsOnFiber
- * @description 针对单个 Fiber 节点来执行其身上标记的“变更类”副作用（Mutation Effects）
- *              以及收集被动副作用（Passive Effects）。
- *              “变更类”副作用指的是那些会直接修改 DOM 结构的操作，比如插入新节点（Placement）、
- *              更新现有节点（Update）、删除节点（ChildDeletion）。
- *              被动副作用指的是由 `useEffect` 产生的回调，它们会被收集起来稍后执行。
- *
- *              此函数会检查 `finishedWork` 节点的 `flags` 属性，并根据不同的标记执行相应的操作：
- *              - **Placement**: 调用 `commitPlacement` 执行 DOM 插入。
- *              - **Update**: 调用 `hostConfig.commitUpdate` 执行 DOM 属性或文本内容的更新。
- *              - **ChildDeletion**: 遍历 `finishedWork.deletions` 数组，对每个需要删除的子节点
- *                调用 `commitDeletion` 来执行实际的 DOM 移除和相关的清理工作。
- *              - **PassiveEffect**: 调用 `commitPassiveEffect` 来收集 `useEffect` 的回调，
- *                以便在 `flushPassiveEffects` 阶段执行。
- *
- *              每处理完一种副作用后，会从 `finishedWork.flags` 中移除对应的标记，
- *              以防止重复执行。
- *
- * @param {FiberNode} finishedWork - 当前正在处理的、已经完成工作的 Fiber 节点。
- *                                   它的 `flags` 属性可能包含上述一种或多种副作用标记。
- * @param {FiberRootNode} root - FiberRootNode 实例，代表整个应用的根。
- *                               在处理某些副作用（如收集被动副作用或执行删除）时需要用到。
- */
-const commitMutaitonEffectsOnFiber = (
+const commitMutationEffectsOnFiber = (
 	finishedWork: FiberNode,
 	root: FiberRootNode
 ) => {
-	const flags = finishedWork.flags;
+	const { flags, tag } = finishedWork;
 
 	// 检查是否包含 Placement (放置/插入) 标记
 	if ((flags & Placement) !== NoFlags) {
@@ -150,7 +101,96 @@ const commitMutaitonEffectsOnFiber = (
 		// 移除 PassiveEffect 标记
 		finishedWork.flags &= ~PassiveEffect;
 	}
+	if ((flags & Ref) !== NoFlags && tag === HostComponent) {
+		safelyDetachRef(finishedWork);
+	}
 };
+
+/**
+ * @function safelyDetachRef
+ * @description 安全地从 Fiber 节点的 DOM 实例上分离 ref。
+ *              它会检查 ref 的类型：
+ *              - 如果 ref 是一个函数，则调用该函数并传入 `null` 作为参数。
+ *              - 如果 ref 是一个对象（通常是 `useRef` 创建的 ref 对象），则将其 `current` 属性设置为 `null`。
+ *              此函数在 commit 阶段的 "mutation" 子阶段被调用，
+ *              通常在 DOM 节点被移除或 ref 本身发生变化时，用于清理旧的 ref 绑定。
+ *
+ * @param {FiberNode} current - 需要分离 ref 的 Fiber 节点。
+ *                              这个 Fiber 节点通常是上一次渲染的 current 树中的节点，
+ *                              并且其 `ref` 属性不为 `null`。
+ */
+function safelyDetachRef(current: FiberNode) {
+	const ref = current.ref;
+	if (ref !== null) {
+		if (typeof ref === 'function') {
+			ref(null);
+		} else {
+			ref.current = null;
+		}
+	}
+}
+
+/**
+ * @function commitLayoutEffectsOnFiber
+ * @description 针对单个 Fiber 节点执行其 "layout" 阶段的副作用。
+ *              目前，这主要包括处理 ref 的附加。
+ *              它会检查 Fiber 节点的 `flags` 属性：
+ *              - 如果包含 `Ref` 标记并且 Fiber 节点是 `HostComponent` 类型，
+ *                则调用 `safelyAttachRef` 来将 ref 附加到 DOM 实例上。
+ *              处理完 `Ref` 副作用后，会从 `flags` 中移除该标记。
+ *
+ * @param {FiberNode} finishedWork - 当前正在处理的、已经完成工作的 Fiber 节点。
+ * @param {FiberRootNode} root - (未使用) FiberRootNode 实例，代表整个应用的根。
+ *                               虽然传入了此参数，但在当前实现中并未直接使用。
+ */
+const commitLayoutEffectsOnFiber = (
+	finishedWork: FiberNode,
+	root: FiberRootNode
+) => {
+	const { flags, tag } = finishedWork;
+
+	if ((flags & Ref) !== NoFlags && tag === HostComponent) {
+		// 绑定新的ref
+		safelyAttachRef(finishedWork);
+		finishedWork.flags &= ~Ref;
+	}
+};
+
+/**
+ * @function safelyAttachRef
+ * @description 安全地将 ref 附加到 Fiber 节点的 DOM 实例上。
+ *              它会检查 ref 的类型：
+ *              - 如果 ref 是一个函数，则调用该函数并将 Fiber 节点的 `stateNode` (DOM 实例) 作为参数传入。
+ *              - 如果 ref 是一个对象（通常是 `useRef` 创建的 ref 对象），则将其 `current` 属性设置为 Fiber 节点的 `stateNode`。
+ *              此函数在 commit 阶段的 "layout" 子阶段被调用，用于处理那些在 DOM 变更后需要更新的 ref。
+ *
+ * @param {FiberNode} fiber - 需要附加 ref 的 Fiber 节点。
+ *                            这个 Fiber 节点应该已经拥有一个 `stateNode` (真实的 DOM 实例)
+ *                            并且其 `ref` 属性不为 `null`。
+ */
+function safelyAttachRef(fiber: FiberNode) {
+	const ref = fiber.ref;
+	if (ref !== null) {
+		const instance = fiber.stateNode;
+		if (typeof ref === 'function') {
+			ref(instance);
+		} else {
+			ref.current = instance;
+		}
+	}
+}
+
+export const commitMutationEffects = commitEffects(
+	'mutation',
+	MutationMask | PassiveMask,
+	commitMutationEffectsOnFiber
+);
+
+export const commitLayoutEffects = commitEffects(
+	'layout',
+	LayoutMask,
+	commitLayoutEffectsOnFiber
+);
 
 /**
  * @function commitPassiveEffect
@@ -329,7 +369,8 @@ function commitDeletion(childToDelete: FiberNode, root: FiberRootNode) {
 		switch (unmountFiber.tag) {
 			case HostComponent: // 如果是宿主组件 (如 <div>)
 				recordHostChildrenToDelete(rootChildrenToDelete, unmountFiber);
-				// TODO 解绑ref
+				// 解绑ref
+				safelyDetachRef(unmountFiber);
 				return;
 			case HostText: // 如果是宿主文本节点
 				recordHostChildrenToDelete(rootChildrenToDelete, unmountFiber);

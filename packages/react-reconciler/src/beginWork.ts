@@ -8,6 +8,8 @@ import {
 	HostRoot,
 	HostText
 } from './workTags';
+import { Ref } from './fiberFlags';
+
 import { mountChildFibers, reconcileChildFibers } from './childFibers';
 import { renderWithHooks } from './fiberHooks';
 import { Lane } from './fiberLanes';
@@ -59,6 +61,7 @@ function updateFragment(wip: FiberNode) {
  */
 function updateFunctionComponent(wip: FiberNode, renderLane: Lane) {
 	const nextChildren = renderWithHooks(wip, renderLane);
+
 	reconcileChildren(wip, nextChildren);
 	return wip.child;
 }
@@ -86,12 +89,14 @@ function updateHostRoot(wip: FiberNode, renderLane: Lane) {
 
 /**
  * @description 处理 Host Component 类型的 Fiber 节点
- * @param wip 父节点
+ * @param workInProgress 父节点
  * @returns 返回协调后产生的第一个子 Fiber 节点
  */
 function updateHostComponent(wip: FiberNode) {
 	const nextProps = wip.pendingProps;
 	const nextChildren = nextProps.children;
+	markRef(wip.alternate, wip);
+
 	reconcileChildren(wip, nextChildren);
 	return wip.child;
 }
@@ -110,5 +115,27 @@ function reconcileChildren(wip: FiberNode, children?: ReactElementType) {
 	} else {
 		// mount
 		wip.child = mountChildFibers(wip, null, children);
+	}
+}
+
+/**
+ * @function markRef
+ * @description 检查一个 Fiber 节点的 ref 是否需要被处理（例如，在 commit 阶段进行附加或分离）。
+ *              如果 ref 是新的（在挂载时）或者在更新时发生了变化，
+ *              则会给 work-in-progress Fiber 节点打上 `Ref` 标记。
+ *
+ * @param {FiberNode | null} current - 当前 Fiber 节点（来自上一次渲染的树）。
+ *                                     如果是首次挂载，则为 `null`。
+ * @param {FiberNode} workInProgress - 正在处理的 work-in-progress Fiber 节点。
+ */
+
+function markRef(current: FiberNode | null, workInProgress: FiberNode) {
+	const ref = workInProgress.ref;
+
+	if (
+		(current === null && ref !== null) ||
+		(current !== null && current.ref !== ref)
+	) {
+		workInProgress.flags |= Ref;
 	}
 }

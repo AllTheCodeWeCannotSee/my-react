@@ -1,4 +1,5 @@
 //
+import { updateFiberProps } from 'react-dom/src/SyntheticEvent';
 import {
 	appendInitialChild,
 	Container,
@@ -7,7 +8,7 @@ import {
 	Instance
 } from 'hostConfig';
 import { FiberNode } from './fiber';
-import { NoFlags, Update } from './fiberFlags';
+import { NoFlags, Update, Ref } from './fiberFlags';
 import {
 	HostRoot,
 	HostText,
@@ -15,6 +16,10 @@ import {
 	FunctionComponent,
 	Fragment
 } from './workTags';
+
+function markRef(fiber: FiberNode) {
+	fiber.flags |= Ref;
+}
 
 /**
  * @description 给传入的 fiber 节点的 flags 属性添加上 Update 标记。
@@ -40,17 +45,21 @@ export const completeWork = (wip: FiberNode) => {
 	switch (wip.tag) {
 		case HostComponent:
 			if (current !== null && wip.stateNode) {
-				// TODO update
-				// 1. props是否变化 {onClick: xx} {onClick: xxx}
-				// 2. 变了 Update flag
-				// className style
+				// update
 				markUpdate(wip);
+				// 标记Ref
+				if (current.ref !== wip.ref) {
+					markRef(wip);
+				}
 			} else {
-				// 如果是新节点
+				// mount
 				const instance = createInstance(wip.type, newProps);
 
 				appendAllChildren(instance, wip);
 				wip.stateNode = instance;
+				if (wip.ref !== null) {
+					markRef(wip);
+				}
 			}
 			bubbleProperties(wip);
 			return null;
@@ -59,17 +68,12 @@ export const completeWork = (wip: FiberNode) => {
 			if (current !== null && wip.stateNode) {
 				const oldText = current.memoizedProps?.content;
 				const newText = newProps.content;
-				//     12c. 如果文本内容发生了变化，就调用 markUpdate 标记该 Fiber 节点，
-				//          以便在提交阶段更新真实 DOM 文本节点的内容。
+
 				if (oldText !== newText) {
 					markUpdate(wip);
 				}
 			} else {
-				// 13. 挂载路径：如果是新文本节点
-				//     13a. 调用 hostConfig 中的 createTextInstance 函数，
-				//          根据 newProps.content 创建一个真实的 DOM 文本节点实例。
 				const instance = createTextInstance(newProps.content);
-				//     13b. 将创建的文本节点实例保存在 stateNode 上。
 				wip.stateNode = instance;
 			}
 			bubbleProperties(wip);
