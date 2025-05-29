@@ -1,4 +1,4 @@
-import { Action } from 'shared/ReactTypes';
+import { Action, ReactContext } from 'shared/ReactTypes';
 
 /**
  * @description
@@ -16,6 +16,7 @@ export interface Dispatcher {
 	useEffect: (callback: () => void | void, deps: any[] | void) => void;
 	useTransition: () => [boolean, (callback: () => void) => void];
 	useRef: <T>(initialValue: T) => { current: T };
+	useContext: <T>(context: ReactContext<T>) => T;
 }
 
 /**

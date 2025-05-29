@@ -14,8 +14,10 @@ import {
 	HostText,
 	HostComponent,
 	FunctionComponent,
-	Fragment
+	Fragment,
+	ContextProvider
 } from './workTags';
+import { popProvider } from './fiberContext';
 
 function markRef(fiber: FiberNode) {
 	fiber.flags |= Ref;
@@ -84,7 +86,11 @@ export const completeWork = (wip: FiberNode) => {
 		case Fragment:
 			bubbleProperties(wip);
 			return null;
-
+		case ContextProvider:
+			const context = wip.type._context;
+			popProvider(context);
+			bubbleProperties(wip);
+			return null;
 		// 如果遇到未处理的 Fiber 类型
 		default:
 			if (__DEV__) {

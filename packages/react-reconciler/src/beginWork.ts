@@ -2,6 +2,7 @@ import { ReactElementType } from 'shared/ReactTypes';
 import { FiberNode } from './fiber';
 import { processUpdateQueue, UpdateQueue } from './updateQueue';
 import {
+	ContextProvider,
 	Fragment,
 	FunctionComponent,
 	HostComponent,
@@ -13,6 +14,7 @@ import { Ref } from './fiberFlags';
 import { mountChildFibers, reconcileChildFibers } from './childFibers';
 import { renderWithHooks } from './fiberHooks';
 import { Lane } from './fiberLanes';
+import { pushProvider } from './fiberContext';
 
 // 递归中的递阶段 (这个注释准确地描述了 beginWork 的角色)
 /**
@@ -34,6 +36,8 @@ export const beginWork = (wip: FiberNode, renderLane: Lane) => {
 			return updateFunctionComponent(wip, renderLane);
 		case Fragment:
 			return updateFragment(wip);
+		case ContextProvider:
+			return updateContextProvider(wip);
 		default:
 			if (__DEV__) {
 				console.warn('beginWork未实现的类型');
@@ -42,6 +46,22 @@ export const beginWork = (wip: FiberNode, renderLane: Lane) => {
 	}
 	return null;
 };
+
+function updateContextProvider(wip: FiberNode) {
+	// {
+	// 		$$typeof: REACT_PROVIDER_TYPE,
+	// 		_context: context
+	// 	};
+	const providerType = wip.type;
+	const context = providerType._context;
+	const newProps = wip.pendingProps;
+
+	pushProvider(context, newProps.value);
+
+	const nextChildren = newProps.children;
+	reconcileChildren(wip, nextChildren);
+	return wip.child;
+}
 
 /**
  * @description 处理 Fragment 类型的 Fiber 节点

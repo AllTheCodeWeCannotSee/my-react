@@ -2,7 +2,7 @@ import { Dispatch } from 'react/src/currentDispatcher';
 import { Dispatcher } from 'react/src/currentDispatcher';
 import currentBatchConfig from 'react/src/currentBatchConfig';
 import internals from 'shared/internals';
-import { Action } from 'shared/ReactTypes';
+import { Action, ReactContext } from 'shared/ReactTypes';
 import { FiberNode } from './fiber';
 import { Lane, NoLane, requestUpdateLane } from './fiberLanes';
 import {
@@ -108,14 +108,16 @@ const HooksDispatcherOnMount: Dispatcher = {
 	useState: mountState,
 	useEffect: mountEffect,
 	useTransition: mountTransition,
-	useRef: mountRef
+	useRef: mountRef,
+	useContext: readContext
 };
 
 const HooksDispatcherOnUpdate: Dispatcher = {
 	useState: updateState,
 	useEffect: updateEffect,
 	useTransition: updateTransition,
-	useRef: updateRef
+	useRef: updateRef,
+	useContext: readContext
 };
 
 /**
@@ -440,6 +442,28 @@ function updateWorkInProgressHook(): Hook {
 		workInProgressHook = newHook; // 更新 `workInProgressHook`，使其指向新的链表尾部
 	}
 	return workInProgressHook; // 返回新创建并链接好的 Hook 对象
+}
+
+/**
+ * @function readContext
+ * @description `useContext` Hook 的实现。
+ *              它用于读取并订阅 React Context 对象的值。
+ *              此函数会确保 `useContext` 是在函数组件的渲染上下文中被调用的，
+ *              然后直接返回当前 Context 对象的 `_currentValue`。
+ *              Context 的值是由最近的 `Context.Provider` 组件在 Fiber 树中向上查找时确定的。
+ *
+ * @template T - Context 所持有的值的类型。
+ * @param {ReactContext<T>} context - 通过 `createContext` 创建的 Context 对象。
+ * @returns {T} 返回当前 Context 对象的值。
+ * @throws {Error} 如果 `useContext` 不是在函数组件内部调用，则抛出错误。
+ */
+function readContext<T>(context: ReactContext<T>): T {
+	const consumer = currentlyRenderingFiber;
+	if (consumer === null) {
+		throw new Error('只能在函数组件中调用useContext');
+	}
+	const value = context._currentValue;
+	return value;
 }
 
 /**

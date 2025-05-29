@@ -258,6 +258,19 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 		return firstNewFiber;
 	}
 
+	function getElementKeyToUse(element: any, index?: number): Key {
+		if (
+			Array.isArray(element) ||
+			typeof element === 'string' ||
+			typeof element === 'number' ||
+			element === undefined ||
+			element === null
+		) {
+			return index;
+		}
+		return element.key !== null ? element.key : index;
+	}
+
 	/**
 	 * @description 尝试从旧节点中找出可复用的，基于此创建 wip 节点
 	 * @param returnFiber 父节点
@@ -272,7 +285,7 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 		index: number,
 		element: any
 	): FiberNode | null {
-		const keyToUse = element.key !== null ? element.key : index;
+		const keyToUse = getElementKeyToUse(element, index);
 		const before = existingChildren.get(keyToUse);
 
 		// HostText
