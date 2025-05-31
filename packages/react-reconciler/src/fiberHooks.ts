@@ -2,7 +2,7 @@ import { Dispatch } from 'react/src/currentDispatcher';
 import { Dispatcher } from 'react/src/currentDispatcher';
 import currentBatchConfig from 'react/src/currentBatchConfig';
 import internals from 'shared/internals';
-import { Action, ReactContext } from 'shared/ReactTypes';
+import { Action, ReactContext, Thenable, Usable } from 'shared/ReactTypes';
 import { FiberNode } from './fiber';
 import { Lane, NoLane, requestUpdateLane } from './fiberLanes';
 import {
@@ -14,6 +14,8 @@ import {
 	UpdateQueue
 } from './updateQueue';
 import { scheduleUpdateOnFiber } from './workLoop';
+import { trackUsedThenable } from './thenable';
+import { REACT_CONTEXT_TYPE } from 'shared/ReactSymbols';
 import { Flags, PassiveEffect } from './fiberFlags';
 import { HookHasEffect, Passive } from './hookEffectTags';
 
@@ -109,7 +111,8 @@ const HooksDispatcherOnMount: Dispatcher = {
 	useEffect: mountEffect,
 	useTransition: mountTransition,
 	useRef: mountRef,
-	useContext: readContext
+	useContext: readContext,
+	use
 };
 
 const HooksDispatcherOnUpdate: Dispatcher = {
@@ -117,7 +120,8 @@ const HooksDispatcherOnUpdate: Dispatcher = {
 	useEffect: updateEffect,
 	useTransition: updateTransition,
 	useRef: updateRef,
-	useContext: readContext
+	useContext: readContext,
+	use
 };
 
 /**
@@ -378,11 +382,11 @@ function updateWorkInProgressHook(): Hook {
 		// currentHook 是一个模块级变量，用于在遍历一个组件的多个 Hook 时，追踪上一次渲染中对应的 Hook 链表的当前位置。
 		// 如果它是 null，说明我们正要处理这个组件的第一个 Hook。
 
-		const current = currentlyRenderingFiber?.alternate; // 获取上一次渲染完成的 Fiber 节点 (current tree)
+		const current = (currentlyRenderingFiber as FiberNode).alternate; // 获取上一次渲染完成的 Fiber 节点 (current tree)
 
 		if (current !== null) {
 			// 如果存在上一次渲染的 Fiber 节点 (即不是首次挂载后的第一次更新，而是后续的更新)
-			nextCurrentHook = current?.memoizedState; // 函数组件的 Fiber 节点的 `memoizedState` 属性指向其 Hook 链表的头节点。
+			nextCurrentHook = current.memoizedState; // 函数组件的 Fiber 节点的 `memoizedState` 属性指向其 Hook 链表的头节点。
 			// 所以，这里获取的是上一次渲染时该组件的第一个 Hook 对象。
 		} else {
 			// mount (理论上这个分支不应该在 updateWorkInProgressHook 中被走到)
@@ -408,7 +412,7 @@ function updateWorkInProgressHook(): Hook {
 		//   上一次渲染有 N 个 Hook，但本次渲染尝试获取第 N+1 个 Hook，说明本次渲染比上次多调用了 Hook。
 		//   这是不允许的，违反了 Hooks 的规则 (Hooks must be called in the same order each time a component renders)。
 		throw new Error(
-			`组件${currentlyRenderingFiber?.type}本次执行时的Hook比上次执行时多`
+			`组件 ${currentlyRenderingFiber?.type.name} 本次执行时的Hook比上次执行时多`
 		);
 	}
 
@@ -624,4 +628,33 @@ function mountWorkInProgressHook(): Hook {
 	}
 
 	return workInProgressHook;
+}
+
+function use<T>(usable: Usable<T>): T {
+	if (usable !== null && typeof usable === 'object') {
+		if (typeof (usable as Thenable<T>).then === 'function') {
+			const thenable = usable as Thenable<T>;
+			return trackUsedThenable(thenable);
+		} else if ((usable as ReactContext<T>).$$typeof === REACT_CONTEXT_TYPE) {
+			const context = usable as ReactContext<T>;
+			return readContext(context);
+		}
+	}
+	throw new Error('不支持的use参数 ' + usable);
+}
+
+/**
+ * @function resetHooksOnUnwind
+ * @description 在 "unwind" 阶段（例如，当处理错误或 Suspense 挂起时，从发生问题的 Fiber 节点向上回溯时）
+ *              重置模块级的 Hook 相关状态变量。
+ *              这包括将 `currentlyRenderingFiber`、`currentHook` 和 `workInProgressHook` 设置为 `null`。
+ *              这样做的目的是确保在后续的渲染尝试（例如，错误边界捕获错误后的重渲染，或 Suspense 边界在数据加载后恢复渲染）中，
+ *              Hook 的状态能够从一个干净的初始状态开始，避免因先前中断的渲染而导致状态错乱。
+ *
+ * @param {FiberNode} wip - (未使用) 当前正在进行 unwind 操作的 work-in-progress Fiber 节点。虽然传入了此参数，但在当前实现中并未直接使用它来重置状态。
+ */
+export function resetHooksOnUnwind(wip: FiberNode) {
+	currentlyRenderingFiber = null;
+	currentHook = null;
+	workInProgressHook = null;
 }

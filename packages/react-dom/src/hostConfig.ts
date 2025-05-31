@@ -109,3 +109,48 @@ export const scheduleMicroTask =
 			? (callback: (...args: any) => void) =>
 					Promise.resolve(null).then(callback)
 			: setTimeout;
+
+/**
+ * @description 隐藏一个 DOM 实例（Element）。
+ *              通过将其 CSS `display` 属性设置为 `'none !important'` 来实现。
+ *
+ * @param {Instance} instance - 需要被隐藏的 DOM 元素实例。
+ */
+export function hideInstance(instance: Instance) {
+	const style = (instance as HTMLElement).style;
+	style.setProperty('display', 'none', 'important');
+}
+
+/**
+ * @description 显示一个先前被 `hideInstance` 隐藏的 DOM 实例（Element）。
+ *              通过将其 CSS `display` 属性设置为空字符串 (`''`) 来实现，
+ *              这样元素会恢复其默认的或由其他 CSS 规则指定的 `display` 值。
+ *
+ * @param {Instance} instance - 需要被显示的 DOM 元素实例。
+ */
+export function unhideInstance(instance: Instance) {
+	const style = (instance as HTMLElement).style;
+	style.display = '';
+}
+
+/**
+ * @description 隐藏一个 DOM 文本节点（TextInstance）。
+ *              通过将其 `nodeValue` 设置为空字符串 (`''`) 来实现。
+ *              这会有效地使文本内容从视觉上消失，但文本节点本身仍然存在于 DOM 树中。
+ *
+ * @param {TextInstance} textInstance - 需要被隐藏的 DOM 文本节点实例。
+ */
+export function hideTextInstance(textInstance: TextInstance) {
+	textInstance.nodeValue = '';
+}
+
+/**
+ * @description 显示一个先前被 `hideTextInstance` 隐藏的 DOM 文本节点（TextInstance）。
+ *              通过将其 `nodeValue` 恢复为指定的文本内容来实现。
+ *
+ * @param {TextInstance} textInstance - 需要被显示的 DOM 文本节点实例。
+ * @param {string} text - 要恢复并显示在文本节点中的文本内容。
+ */
+export function unhideTextInstance(textInstance: TextInstance, text: string) {
+	textInstance.nodeValue = text;
+}

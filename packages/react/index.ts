@@ -5,6 +5,8 @@ export { createContext } from './src/context';
 import { jsxDEV, jsx, isValidElement as isValidElementFn } from './src/jsx';
 // React
 
+export { REACT_SUSPENSE_TYPE as Suspense } from 'shared/ReactSymbols';
+
 export const useState: Dispatcher['useState'] = (initialState) => {
 	const dispatcher = resolveDispatcher();
 	return dispatcher.useState(initialState);
@@ -33,6 +35,11 @@ export const useContext: Dispatcher['useContext'] = (context) => {
 export const __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED = {
 	currentDispatcher,
 	currentBatchConfig
+};
+
+export const use: Dispatcher['use'] = (usable) => {
+	const dispatcher = resolveDispatcher() as Dispatcher;
+	return dispatcher.use(usable);
 };
 
 export const version = '0.0.0';
