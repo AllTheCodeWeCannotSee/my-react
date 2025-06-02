@@ -4,8 +4,16 @@ import currentBatchConfig from 'react/src/currentBatchConfig';
 import internals from 'shared/internals';
 import { Action, ReactContext, Thenable, Usable } from 'shared/ReactTypes';
 import { FiberNode } from './fiber';
-import { Lane, NoLane, requestUpdateLane } from './fiberLanes';
 import {
+	Lane,
+	NoLane,
+	NoLanes,
+	mergeLanes,
+	removeLanes,
+	requestUpdateLane
+} from './fiberLanes';
+import {
+	basicStateReducer,
 	createUpdate,
 	createUpdateQueue,
 	enqueueUpdate,
@@ -18,6 +26,8 @@ import { trackUsedThenable } from './thenable';
 import { REACT_CONTEXT_TYPE } from 'shared/ReactSymbols';
 import { Flags, PassiveEffect } from './fiberFlags';
 import { HookHasEffect, Passive } from './hookEffectTags';
+import { markWipReceivedUpdate } from './beginWork';
+import { readContext as readContextOrigin } from './fiberContext';
 
 let currentlyRenderingFiber: FiberNode | null = null;
 
@@ -33,6 +43,11 @@ let currentHook: Hook | null = null;
 let renderLane: Lane = NoLane;
 
 const { currentDispatcher } = internals;
+
+function readContext<Value>(context: ReactContext<Value>): Value {
+	const consumer = currentlyRenderingFiber as FiberNode;
+	return readContextOrigin(consumer, context);
+}
 
 /**
  * @property {any} memoizedState - 存储了 Hook 的核心数据（如状态值）
@@ -53,24 +68,24 @@ export interface Effect {
 	tag: Flags;
 	create: EffectCallback | void;
 	destroy: EffectCallback | void;
-	deps: EffectDeps;
+	deps: HookDeps;
 	next: Effect | null;
 }
 
 export interface FCUpdateQueue<State> extends UpdateQueue<State> {
 	// 指向effect环状链表中，最后一个
 	lastEffect: Effect | null;
+	lastRenderedState: State;
 }
 
 type EffectCallback = () => void;
-type EffectDeps = any[] | null;
+export type HookDeps = any[] | null;
 
-/**
- * @description 执行一个函数式组件 (Function Component) 并获取它渲染出来的内容
- * @param wip 是 FunctionComponent 类型的fibernode
- * @return 返回函数组件执行后产生的子 React 元素 (children)
- */
-export function renderWithHooks(wip: FiberNode, lane: Lane) {
+export function renderWithHooks(
+	wip: FiberNode,
+	Component: FiberNode['type'],
+	lane: Lane
+) {
 	// 赋值操作
 
 	// 目的：hook要知道自身数据保存在哪里
@@ -92,8 +107,7 @@ export function renderWithHooks(wip: FiberNode, lane: Lane) {
 		// mount
 		currentDispatcher.current = HooksDispatcherOnMount;
 	}
-	// wip.type: 这个 type 属性对于函数式组件来说，就是那个组件函数本身
-	const Component = wip.type;
+
 	const props = wip.pendingProps;
 	// FC render
 	const children = Component(props);
@@ -112,7 +126,9 @@ const HooksDispatcherOnMount: Dispatcher = {
 	useTransition: mountTransition,
 	useRef: mountRef,
 	useContext: readContext,
-	use
+	use,
+	useMemo: mountMemo,
+	useCallback: mountCallback
 };
 
 const HooksDispatcherOnUpdate: Dispatcher = {
@@ -121,7 +137,9 @@ const HooksDispatcherOnUpdate: Dispatcher = {
 	useTransition: updateTransition,
 	useRef: updateRef,
 	useContext: readContext,
-	use
+	use,
+	useMemo: updateMemo,
+	useCallback: updateCallback
 };
 
 /**
@@ -168,7 +186,7 @@ function updateRef<T>(initialValue: T): { current: T } {
  * @param create 用户传入的 useEffect 的第一个参数，即副作用的创建函数
  * @param deps 用户传入的 useEffect 的第二个参数，即依赖项数组 (可选)
  */
-function mountEffect(create: EffectCallback | void, deps: EffectDeps | void) {
+function mountEffect(create: EffectCallback | void, deps: HookDeps | void) {
 	// 获取这次 useEffect 调用的 Hook 对象
 	const hook = mountWorkInProgressHook();
 	const nextDeps = deps === undefined ? null : deps;
@@ -200,7 +218,7 @@ function mountEffect(create: EffectCallback | void, deps: EffectDeps | void) {
  * @param {EffectCallback | void} create - 用户传入的 `useEffect` 的第一个参数，即副作用的创建函数。
  * @param {EffectDeps | void} deps - 用户传入的 `useEffect` 的第二个参数，即依赖项数组 (可选)。
  */
-function updateEffect(create: EffectCallback | void, deps: EffectDeps | void) {
+function updateEffect(create: EffectCallback | void, deps: HookDeps | void) {
 	const hook = updateWorkInProgressHook();
 	const nextDeps = deps === undefined ? null : deps;
 	let destroy: EffectCallback | void;
@@ -235,7 +253,7 @@ function updateEffect(create: EffectCallback | void, deps: EffectDeps | void) {
  * @param {EffectDeps} prevDeps - 上一次渲染时的依赖项数组。
  * @returns {boolean} 如果两个依赖项数组被认为是相等的，则返回 `true`；否则返回 `false`。
  */
-function areHookInputsEqual(nextDeps: EffectDeps, prevDeps: EffectDeps) {
+function areHookInputsEqual(nextDeps: HookDeps, prevDeps: HookDeps) {
 	if (prevDeps === null || nextDeps === null) {
 		return false;
 	}
@@ -261,7 +279,7 @@ function pushEffect(
 	hookFlags: Flags,
 	create: EffectCallback | void,
 	destroy: EffectCallback | void,
-	deps: EffectDeps
+	deps: HookDeps
 ): Effect {
 	const effect: Effect = {
 		tag: hookFlags,
@@ -303,21 +321,41 @@ function createFCUpdateQueue<State>() {
 }
 
 /**
- * @description
- * * 联系：当一个已经挂载的组件因为状态变化或其他原因需要重新渲染时，它内部的 useState 调用就会走到这个
- * * 流程：
- * 	* 找到当前这个 useState 调用在上一次渲染时对应的状态数据。
- * 	* 检查是否有新的状态更新请求（即，是否调用了 setState）。
- * 	* 如果有，则计算出新的状态。
- * 	* 返回最新的状态值和对应的 setState 函数。
- * @returns
+ * @function updateState
+ * @description `useState` Hook 在组件更新阶段的实现。
+ *              当一个已挂载的组件因状态变化或其他原因重新渲染时，其内部的 `useState` 调用会执行此函数。
+ *              主要流程：
+ *              1. **获取当前 Hook**: 调用 `updateWorkInProgressHook` 来获取或创建与当前 `useState` 调用对应的
+ *                 work-in-progress Hook 对象，并从 `currentHook` (上一次渲染的 Hook) 继承状态和队列信息。
+ *              2. **处理更新队列**:
+ *                 - 获取当前 Hook 的 `updateQueue`、`baseState` (上一次计算完成的基础状态)。
+ *                 - 检查 `updateQueue.shared.pending` (由 `dispatchSetState` 添加的新更新)
+ *                   以及 `currentHook.baseQueue` (上一次渲染中被跳过的更新)。
+ *                 - 如果存在新的 `pending` 更新，将其与 `baseQueue` 合并，形成一个完整的待处理更新链表。
+ *                   这个合并后的链表会存储在 `currentHook.baseQueue` 中，以备后续可能的 bailout 或重用。
+ *              3. **计算新状态**: 如果存在待处理的更新链表 (`baseQueue`)：
+ *                 - 调用 `processUpdateQueue`，传入 `baseState`、`baseQueue` 和当前的 `renderLane`。
+ *                 - `processUpdateQueue` 会遍历更新链表，只应用那些优先级与 `renderLane` 匹配的更新，
+ *                   计算出新的 `memoizedState`。
+ *                 - 任何因优先级不足而被跳过的更新，会被 `processUpdateQueue` 重新组织成一个新的 `baseQueue`，
+ *                   并更新 `baseState` (第一个被跳过的更新前的状态)。
+ *                 - 如果计算出的 `memoizedState` 与上一次的 `memoizedState` (通过 `Object.is` 比较) 不同，
+ *                   则调用 `markWipReceivedUpdate` 标记当前 Fiber 节点接收到了更新。
+ *              4. **更新 Hook 状态**: 将计算得到的 `memoizedState`、`baseState` 和 `baseQueue`
+ *                 存储回当前的 work-in-progress Hook 对象。
+ *              5. **记录渲染状态**: 将最终的 `memoizedState` 存储到 `updateQueue.lastRenderedState`，
+ *                 供下一次 eager state 优化或 `dispatchSetState` 使用。
+ * @template State - 状态的类型。
+ * @returns {[State, Dispatch<State>]} 返回一个包含两个元素的数组：
+ *          - `memoizedState` (State): 当前 Hook 计算得出的最新状态值。
+ *          - `dispatch` (Dispatch<State>): 与此状态关联的 dispatch 函数 (即 `setState`)。
  */
 function updateState<State>(): [State, Dispatch<State>] {
 	// 找到当前useState对应的hook数据
 	const hook = updateWorkInProgressHook();
 
 	// 计算新state的逻辑
-	const queue = hook.updateQueue as UpdateQueue<State>;
+	const queue = hook.updateQueue as FCUpdateQueue<State>;
 
 	const baseState = hook.baseState;
 	const pending = queue.shared.pending;
@@ -347,14 +385,31 @@ function updateState<State>(): [State, Dispatch<State>] {
 		queue.shared.pending = null;
 	}
 	if (baseQueue !== null) {
+		const prevState = hook.memoizedState;
 		const {
 			memoizedState,
 			baseQueue: newBaseQueue,
 			baseState: newBaseState
-		} = processUpdateQueue(baseState, baseQueue, renderLane);
+		} = processUpdateQueue(baseState, baseQueue, renderLane, (update) => {
+			const skippedLane = update.lane;
+			const fiber = currentlyRenderingFiber as FiberNode;
+			// NoLanes
+			fiber.lanes = mergeLanes(fiber.lanes, skippedLane);
+		});
+
+		// NaN === NaN // false
+		// Object.is true
+
+		// +0 === -0 // true
+		// Object.is false
+		if (!Object.is(prevState, memoizedState)) {
+			markWipReceivedUpdate();
+		}
 		hook.memoizedState = memoizedState;
 		hook.baseState = newBaseState;
 		hook.baseQueue = newBaseQueue;
+
+		queue.lastRenderedState = memoizedState;
 	}
 
 	return [hook.memoizedState, queue.dispatch as Dispatch<State>];
@@ -449,31 +504,25 @@ function updateWorkInProgressHook(): Hook {
 }
 
 /**
- * @function readContext
- * @description `useContext` Hook 的实现。
- *              它用于读取并订阅 React Context 对象的值。
- *              此函数会确保 `useContext` 是在函数组件的渲染上下文中被调用的，
- *              然后直接返回当前 Context 对象的 `_currentValue`。
- *              Context 的值是由最近的 `Context.Provider` 组件在 Fiber 树中向上查找时确定的。
- *
- * @template T - Context 所持有的值的类型。
- * @param {ReactContext<T>} context - 通过 `createContext` 创建的 Context 对象。
- * @returns {T} 返回当前 Context 对象的值。
- * @throws {Error} 如果 `useContext` 不是在函数组件内部调用，则抛出错误。
- */
-function readContext<T>(context: ReactContext<T>): T {
-	const consumer = currentlyRenderingFiber;
-	if (consumer === null) {
-		throw new Error('只能在函数组件中调用useContext');
-	}
-	const value = context._currentValue;
-	return value;
-}
-
-/**
- * @description useState Hook 在组件首次挂载时的实现。
- * @param initialState 初始状态值，或者一个计算初始状态的函数。
- * @returns 数组 [state, setState]
+ * @function mountState
+ * @description `useState` Hook 在组件首次挂载 (mount) 阶段的实现。
+ *              它负责：
+ *              1. **创建 Hook 对象**: 调用 `mountWorkInProgressHook` 来为当前的 `useState` 调用
+ *                 创建一个新的 Hook 对象，并将其链接到当前 Fiber 节点的 Hook 链表中。
+ *              2. **初始化状态**:
+ *                 - 如果 `initialState` 是一个函数，则调用该函数以获取初始状态值（惰性初始化）。
+ *                 - 否则，直接使用 `initialState` 作为初始状态值。
+ *              3. **创建更新队列**: 为此 Hook 创建一个新的 `FCUpdateQueue` (函数组件更新队列)。
+ *              4. **存储状态和队列**: 将计算出的初始状态 (`memoizedState`) 和创建的更新队列
+ *                 存储到新创建的 Hook 对象中。`baseState` 也被初始化为 `memoizedState`。
+ *              5. **创建 Dispatch 函数**: 创建一个与此状态和队列绑定的 `dispatchSetState` 函数
+ *                 (即用户调用的 `setState` 函数)。
+ *              6. **关联 Dispatch**: 将创建的 `dispatch` 函数存储到更新队列的 `dispatch` 属性上。
+ *              7. **记录渲染状态**: 将初始状态存储到更新队列的 `lastRenderedState` 属性，
+ *                 供后续的 eager state 优化使用。
+ * @template State - 状态的类型。
+ * @param {(() => State) | State} initialState - 初始状态值，或者一个返回初始状态值的函数。
+ * @returns {[State, Dispatch<State>]} 返回一个包含两个元素的数组：初始状态值和用于更新该状态的 dispatch 函数。
  */
 function mountState<State>(
 	initialState: (() => State) | State // 初始状态值，或者一个计算初始状态的函数
@@ -494,7 +543,7 @@ function mountState<State>(
 		memoizedState = initialState;
 	}
 
-	const queue = createUpdateQueue<State>();
+	const queue = createFCUpdateQueue<State>();
 	hook.updateQueue = queue;
 	hook.memoizedState = memoizedState;
 	hook.baseState = memoizedState;
@@ -505,6 +554,8 @@ function mountState<State>(
 
 	// 将 dispatch 函数关联到它的队列上。
 	queue.dispatch = dispatch;
+
+	queue.lastRenderedState = memoizedState;
 
 	return [memoizedState, dispatch];
 }
@@ -578,20 +629,64 @@ function startTransition(setPending: Dispatch<boolean>, callback: () => void) {
 
 /**
  * @description 当你调用由 useState 返回的那个用于更新状态的函数时，最终就会执行到这个 dispatchSetState。
- * 1. 打包更新请求
- * 2. 把更新请求放入队列
- * 3. 触发重新渲染
+ *              它的主要职责是：
+ *              1. **请求更新优先级 (Lane)**: 调用 `requestUpdateLane` 来确定本次状态更新的优先级。
+ *              2. **创建更新对象 (Update)**: 使用传入的 `action` (新的状态值或一个返回新状态的函数) 和获取到的 `lane` 来创建一个 `Update` 对象。
+ *              3. **尝试 Eager State 优化**:
+ *                 - 如果当前 Fiber 节点及其 alternate 都没有待处理的更新 (即 `fiber.lanes` 和 `current.lanes` 均为 `NoLanes`)，
+ *                   这表明这是该 Fiber 节点自上次渲染以来的首次更新。
+ *                 - 在这种情况下，会尝试“急切地”(eagerly)计算新状态：
+ *                   - 使用 `basicStateReducer` 和 `updateQueue.lastRenderedState` (上一次渲染的状态) 以及当前的 `action` 来计算出 `eagerState`。
+ *                   - 如果计算出的 `eagerState` 与 `lastRenderedState` 相同 (通过 `Object.is` 比较)，
+ *                     则认为状态没有实际变化，可以进行优化。
+ *                   - 此时，`Update` 对象会被标记为 `hasEagerState` 和 `eagerState`，
+ *                     并以 `NoLane` 的优先级入队 (`enqueueUpdate`)。这意味着如果后续没有其他更高优先级的更新，
+ *                     这个更新本身可能不会触发一次完整的重新渲染。然后函数直接返回，实现 bailout。
+ *              4. **入队更新**: 如果 Eager State 优化不适用或未命中，则将创建的 `Update` 对象
+ *                 (带有其原始的 `lane`) 添加到 `fiber` 节点的 `updateQueue` 中 (通过 `enqueueUpdate`)。
+ *                 `enqueueUpdate` 还会将 `lane` 合并到 `fiber.lanes` 和 `fiber.alternate.lanes` 中，
+ *                 标记该 Fiber 节点在此优先级上有待处理的工作。
+ *              5. **调度更新**: 调用 `scheduleUpdateOnFiber` 来通知 React 调度器，
+ *                 该 `fiber` 节点有新的更新需要在指定的 `lane` 上处理，从而触发后续的渲染流程。
+ *
+ * @template State - 状态的类型。
+ * @param {FiberNode} fiber - 与此状态更新关联的 FiberNode (通常是函数组件的 FiberNode)。
+ * @param {FCUpdateQueue<State>} updateQueue - 该 `useState` Hook 对应的更新队列。
+ * @param {Action<State>} action - 用户调用 `setState` 时传入的参数，
+ *                                 可以是新的状态值，也可以是一个接收前一个状态并返回新状态的函数。
  */
 function dispatchSetState<State>(
 	fiber: FiberNode,
-	updateQueue: UpdateQueue<State>,
+	updateQueue: FCUpdateQueue<State>,
 	action: Action<State>
 ) {
 	const lane = requestUpdateLane();
 	const update = createUpdate(action, lane);
 
-	// 2. 把这个 'Update' 对象加入到 Hook 的更新队列中。
-	enqueueUpdate(updateQueue, update);
+	// eager策略
+	const current = fiber.alternate;
+	if (
+		fiber.lanes === NoLanes &&
+		(current === null || current.lanes === NoLanes)
+	) {
+		// 当前产生的update是这个fiber的第一个update
+		// 1. 更新前的状态 2.计算状态的方法
+		const currentState = updateQueue.lastRenderedState;
+		const eagarState = basicStateReducer(currentState, action);
+		update.hasEagerState = true;
+		update.eagerState = eagarState;
+
+		if (Object.is(currentState, eagarState)) {
+			enqueueUpdate(updateQueue, update, fiber, NoLane);
+			// 命中eagerState
+			if (__DEV__) {
+				console.warn('命中eagerState', fiber);
+			}
+			return;
+		}
+	}
+
+	enqueueUpdate(updateQueue, update, fiber, lane);
 
 	// 3. 为这个组件安排一次重新渲染。
 	scheduleUpdateOnFiber(fiber, lane);
@@ -657,4 +752,146 @@ export function resetHooksOnUnwind(wip: FiberNode) {
 	currentlyRenderingFiber = null;
 	currentHook = null;
 	workInProgressHook = null;
+}
+
+/**
+ * @function bailoutHook
+ * @description 当一个函数组件在 `beginWork` 阶段可以进行 bailout 优化时（即其 props、state 和 context
+ *              在当前 `renderLane` 下没有发生需要重新渲染的变化），此函数被调用。
+ *              它执行以下操作以确保 bailout 的正确性：
+ *              1. 将 `wip` (work-in-progress) Fiber 节点的 `updateQueue` 设置为 `current`
+ *                 (上一次渲染的 Fiber 节点) 的 `updateQueue`。这确保了即使组件本身不重新执行，
+ *                 其 Hooks (特别是 `useEffect`) 的状态和 Effect 链表仍然是基于上一次渲染的结果，
+ *                 以便在 commit 阶段正确处理 `useEffect` 的销毁和创建逻辑（如果依赖项变化，
+ *                 则 bailout 不会发生；如果依赖项未变，则销毁和创建回调不应执行）。
+ *              2. 从 `wip.flags` 中移除 `PassiveEffect` 标记。因为组件 bailout 了，
+ *                 意味着它的 `useEffect` 回调（创建函数）不应该在本次 commit 阶段执行。
+ *              3. 从 `current.lanes` 中移除当前的 `renderLane`，表示与此 `renderLane` 相关的工作
+ *                 在该 Fiber 节点上已经通过 bailout 完成。
+ * @param {FiberNode} wip - 当前正在处理的 work-in-progress Fiber 节点，它是 bailout 的目标。
+ * @param {Lane} renderLane - 当前渲染工作的优先级 Lane。
+ */
+export function bailoutHook(wip: FiberNode, renderLane: Lane) {
+	const current = wip.alternate as FiberNode;
+	wip.updateQueue = current.updateQueue;
+	wip.flags &= ~PassiveEffect;
+
+	current.lanes = removeLanes(current.lanes, renderLane);
+}
+
+/**
+ * @function mountCallback
+ * @description `useCallback` Hook 在组件首次挂载时的实现。
+ *              它会：
+ *              1. 调用 `mountWorkInProgressHook` 来创建一个新的 Hook 对象。
+ *              2. 将传入的 `callback` 函数和依赖项数组 `deps` (如果未提供则为 `null`)
+ *                 存储为一个数组 `[callback, deps]` 在新 Hook 对象的 `memoizedState` 中。
+ *              3. 直接返回传入的 `callback` 函数。
+ *                 在挂载阶段，`useCallback` 总是返回用户提供的原始回调函数。
+ * @template T - 回调函数的类型。
+ * @param {T} callback - 用户希望 memoize 的回调函数。
+ * @param {HookDeps | undefined} deps - (可选) 依赖项数组。如果提供，当依赖项发生变化时，`useCallback` 会返回一个新的回调函数。
+ * @returns {T} 返回传入的 `callback` 函数。
+ */
+function mountCallback<T>(callback: T, deps: HookDeps | undefined) {
+	const hook = mountWorkInProgressHook();
+	const nextDeps = deps === undefined ? null : deps;
+	hook.memoizedState = [callback, nextDeps];
+	return callback;
+}
+
+/**
+ * @function updateCallback
+ * @description `useCallback` Hook 在组件更新阶段的实现。
+ *              它会：
+ *              1. 调用 `updateWorkInProgressHook` 来获取或创建与当前 `useCallback` 调用对应的
+ *                 work-in-progress Hook 对象，并从 `currentHook` 继承状态。
+ *              2. 获取新的依赖项数组 `nextDeps` (如果未提供则为 `null`)。
+ *              3. 从上一次渲染的 Hook 状态 (`prevState = hook.memoizedState`) 中获取之前存储的回调函数和依赖项。
+ *              4. **依赖项比较**:
+ *                 - 如果 `nextDeps` (新的依赖项) 不为 `null`：
+ *                   - 调用 `areHookInputsEqual` 比较 `nextDeps` 和 `prevState[1]` (旧的依赖项)。
+ *                   - 如果依赖项相等，则直接返回 `prevState[0]` (上一次 memoized 的回调函数)，
+ *                     从而避免创建新的回调函数。
+ *              5. **返回新回调**: 如果依赖项不相等，或者没有提供依赖项 (`nextDeps` 为 `null`，意味着每次都应返回新回调)，
+ *                 则将新的 `callback` 和 `nextDeps` 存储在当前 Hook 的 `memoizedState` 中，并返回新的 `callback` 函数。
+ * @template T - 回调函数的类型。
+ * @param {T} callback - 用户希望 memoize 的回调函数。
+ * @param {HookDeps | undefined} deps - (可选) 依赖项数组。
+ * @returns {T} 如果依赖项未改变，则返回上一次 memoized 的回调函数；否则返回新传入的 `callback` 函数。
+ */
+function updateCallback<T>(callback: T, deps: HookDeps | undefined) {
+	const hook = updateWorkInProgressHook();
+	const nextDeps = deps === undefined ? null : deps;
+	const prevState = hook.memoizedState;
+
+	if (nextDeps !== null) {
+		const prevDeps = prevState[1];
+		if (areHookInputsEqual(nextDeps, prevDeps)) {
+			return prevState[0];
+		}
+	}
+	hook.memoizedState = [callback, nextDeps];
+	return callback;
+}
+
+/**
+ * @function mountMemo
+ * @description `useMemo` Hook 在组件首次挂载时的实现。
+ *              它会：
+ *              1. 调用 `mountWorkInProgressHook` 来创建一个新的 Hook 对象。
+ *              2. 获取依赖项数组 `nextDeps` (如果未提供则为 `null`)。
+ *              3. 执行用户提供的 `nextCreate` 函数来计算初始的 memoized 值 (`nextValue`)。
+ *              4. 将计算得到的 `nextValue` 和 `nextDeps` 存储为一个数组 `[nextValue, nextDeps]`
+ *                 在当前 Hook 对象的 `memoizedState` 中。
+ *              5. 直接返回计算得到的 `nextValue`。
+ *                 在挂载阶段，`useMemo` 总是执行 `nextCreate` 并返回其结果。
+ * @template T - memoized 值的类型。
+ * @param {() => T} nextCreate - 一个函数，其返回值将被 memoize。
+ * @param {HookDeps | undefined} deps - (可选) 依赖项数组。
+ * @returns {T} 返回由 `nextCreate` 函数计算得到的 memoized 值。
+ */
+function mountMemo<T>(nextCreate: () => T, deps: HookDeps | undefined) {
+	const hook = mountWorkInProgressHook();
+	const nextDeps = deps === undefined ? null : deps;
+	const nextValue = nextCreate();
+	hook.memoizedState = [nextValue, nextDeps];
+	return nextValue;
+}
+
+/**
+ * @function updateMemo
+ * @description `useMemo` Hook 在组件更新阶段的实现。
+ *              它会：
+ *              1. 调用 `updateWorkInProgressHook` 来获取或创建与当前 `useMemo` 调用对应的
+ *                 work-in-progress Hook 对象，并从 `currentHook` 继承状态。
+ *              2. 获取新的依赖项数组 `nextDeps` (如果未提供则为 `null`)。
+ *              3. 从上一次渲染的 Hook 状态 (`prevState = hook.memoizedState`) 中获取之前存储的 memoized 值和依赖项。
+ *              4. **依赖项比较**:
+ *                 - 如果 `nextDeps` (新的依赖项) 不为 `null`：
+ *                   - 调用 `areHookInputsEqual` 比较 `nextDeps` 和 `prevState[1]` (旧的依赖项)。
+ *                   - 如果依赖项相等，则直接返回 `prevState[0]` (上一次 memoized 的值)，
+ *                     从而避免重新计算。
+ *              5. **重新计算并返回新值**: 如果依赖项不相等，或者没有提供依赖项 (`nextDeps` 为 `null`，意味着每次都应重新计算)，
+ *                 则执行 `nextCreate` 函数来计算新的 memoized 值 (`nextValue`)。
+ *                 然后将 `nextValue` 和 `nextDeps` 存储在当前 Hook 的 `memoizedState` 中，并返回 `nextValue`。
+ * @template T - memoized 值的类型。
+ * @param {() => T} nextCreate - 一个函数，其返回值将被 memoize。
+ * @param {HookDeps | undefined} deps - (可选) 依赖项数组。
+ * @returns {T} 如果依赖项未改变，则返回上一次 memoized 的值；否则返回由 `nextCreate` 函数新计算得到的值。
+ */
+function updateMemo<T>(nextCreate: () => T, deps: HookDeps | undefined) {
+	const hook = updateWorkInProgressHook();
+	const nextDeps = deps === undefined ? null : deps;
+	const prevState = hook.memoizedState;
+
+	if (nextDeps !== null) {
+		const prevDeps = prevState[1];
+		if (areHookInputsEqual(nextDeps, prevDeps)) {
+			return prevState[0];
+		}
+	}
+	const nextValue = nextCreate();
+	hook.memoizedState = [nextValue, nextDeps];
+	return nextValue;
 }

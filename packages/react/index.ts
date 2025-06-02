@@ -6,6 +6,7 @@ import { jsxDEV, jsx, isValidElement as isValidElementFn } from './src/jsx';
 // React
 
 export { REACT_SUSPENSE_TYPE as Suspense } from 'shared/ReactSymbols';
+export { memo } from './src/memo';
 
 export const useState: Dispatcher['useState'] = (initialState) => {
 	const dispatcher = resolveDispatcher();
@@ -31,6 +32,17 @@ export const useContext: Dispatcher['useContext'] = (context) => {
 	const dispatcher = resolveDispatcher() as Dispatcher;
 	return dispatcher.useContext(context);
 };
+
+export const useMemo: Dispatcher['useMemo'] = (nextCreate, deps) => {
+	const dispatcher = resolveDispatcher() as Dispatcher;
+	return dispatcher.useMemo(nextCreate, deps);
+};
+
+export const useCallback: Dispatcher['useCallback'] = (callback, deps) => {
+	const dispatcher = resolveDispatcher() as Dispatcher;
+	return dispatcher.useCallback(callback, deps);
+};
+
 // 内部数据共享层
 export const __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED = {
 	currentDispatcher,

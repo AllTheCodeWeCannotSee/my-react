@@ -1,23 +1,21 @@
 import { Action, ReactContext, Usable } from 'shared/ReactTypes';
-
+import { HookDeps } from 'react-reconciler/src/fiberHooks';
 /**
- * @description
- * - 这个接口描述了一个对象的结构，该对象包含了各种 React Hook 的具体实现
- * - 内部数据共享层， 中的当前使用的hooks集合
+ * @interface Dispatcher
+ * @description 定义了 React Hooks 的集合。
+ *              在函数组件渲染期间，`currentDispatcher.current` 会指向一个实现了此接口的对象。
+ *              这个对象包含了特定上下文（例如，首次渲染、更新渲染或 SSR）中 Hooks (如 `useState`, `useEffect`) 的具体实现。
+ *              通过这种机制，React 可以在不同的渲染阶段或环境中切换 Hooks 的行为。
  */
 export interface Dispatcher {
-	/**
-	 * @description
-	 * 这是一个泛型方法，`<T>` 代表状态的类型。
-	 * @param initialState 参数可以是状态的初始值，也可以是一个返回初始值的函数
-	 * @returns 该方法返回一个包含两个元素的数组：当前状态值 T 和一个用于更新该状态的 Dispatch<T> 函数
-	 */
 	useState: <T>(initialState: (() => T) | T) => [T, Dispatch<T>];
-	useEffect: (callback: () => void | void, deps: any[] | void) => void;
+	useEffect: (callback: () => void | void, deps: HookDeps | undefined) => void;
 	useTransition: () => [boolean, (callback: () => void) => void];
 	useRef: <T>(initialValue: T) => { current: T };
 	useContext: <T>(context: ReactContext<T>) => T;
 	use: <T>(usable: Usable<T>) => T;
+	useMemo: <T>(nextCreate: () => T, deps: HookDeps | undefined) => T;
+	useCallback: <T>(callback: T, deps: HookDeps | undefined) => T;
 }
 
 /**
@@ -26,19 +24,27 @@ export interface Dispatcher {
 export type Dispatch<State> = (action: Action<State>) => void;
 
 /**
- * @description
- * 它创建了一个名为 currentDispatcher 的常量对象。
- * 这个对象有一个名为 current 的属性。
- * 它被初始化为 { current: null }，表示在 React 组件渲染周期之外，或者在没有特定 Hook 上下文时，没有活动的 Dispatcher。
+ * @constant currentDispatcher
+ * @description 一个全局共享的对象，其 `current` 属性指向当前激活的 Hooks Dispatcher。
+ *              在函数组件渲染期间，React 的渲染器 (reconciler) 会将 `currentDispatcher.current`
+ *              设置为包含特定上下文（如 mount 或 update）的 Hooks 实现的对象 (一个 `Dispatcher` 实例)。
+ *              当 Hooks (如 `useState`, `useEffect`) 被调用时，它们会通过 `resolveDispatcher`
+ *              读取 `currentDispatcher.current` 来获取并执行相应的实现。
+ *              在组件渲染周期之外或没有特定 Hook 上下文时，`currentDispatcher.current` 为 `null`。
  */
 const currentDispatcher: { current: Dispatcher | null } = {
 	current: null
 };
 
 /**
- * @description
- * 当任何 Hook (如 useState) 被调用时，它会在 Hook 内部被调用，以获取当前应该使用的 Dispatcher 对象。
- * 如果 currentDispatcher.current 是 null，这意味着 Hook 在一个无效的上下文中被调用（例如，在函数组件的渲染函数之外，或在类组件中）。在这种情况下，它会抛出一个错误，提示用户“hook只能在函数组件中执行”。
+ * @function resolveDispatcher
+ * @description 获取当前激活的 Hooks Dispatcher 对象。
+ *              在 React 的 Hooks (如 `useState`, `useEffect` 等) 内部被调用，
+ *              以确保 Hook 是在正确的渲染上下文中执行。
+ *              它从全局的 `currentDispatcher.current` 中读取当前的 Dispatcher。
+ * @returns {Dispatcher} 返回当前激活的 Dispatcher 对象。
+ * @throws {Error} 如果 `currentDispatcher.current` 为 `null` (即 Hook 在函数组件的渲染上下文之外被调用)，
+ *                 则抛出错误，提示 "hook只能在函数组件中执行"。
  */
 export const resolveDispatcher = (): Dispatcher => {
 	const dispatcher = currentDispatcher.current;

@@ -15,10 +15,21 @@ import { HostText, Fragment } from './workTags';
 type ExistingChildren = Map<string | number, FiberNode>;
 
 /**
- * @description 这是一个工厂函数。它本身不直接进行协调工作，而是返回一个执行协调工作的函数。
- * @param {boolean} shouldTrackEffects
- * * 如果为 true，协调器会追踪“副作用”，比如需要在 DOM 中放置一个新元素（Placement）或删除一个旧元素（ChildDeletion）。这通常在更新一个已存在的组件树时使用。
- * * 如果为 false，它不会以同样的方式追踪这些副作用。这通常在组件树首次挂载时使用，因为所有东西都是新的，都需要被放置。
+ * @function ChildReconciler
+ * @description 一个工厂函数，用于创建子节点协调器函数。
+ *              根据 `shouldTrackEffects` 参数，返回的协调器函数在协调过程中
+ *              会（或不会）追踪副作用（如 `Placement`, `ChildDeletion`）。
+ *              - 当 `shouldTrackEffects` 为 `true` (通常用于更新已存在的组件树)，
+ *                协调器会比较新旧子节点，并标记需要进行的 DOM 操作 (如移动、删除、插入)。
+ *              - 当 `shouldTrackEffects` 为 `false` (通常用于组件树的首次挂载)，
+ *                协调器主要负责创建新的子 Fiber 节点，而不会标记删除等副作用，
+ *                因为所有新节点都需要被放置。
+ *
+ * @param {boolean} shouldTrackEffects - 指示返回的协调器函数是否应该追踪副作用。
+ * @returns {(returnFiber: FiberNode, currentFirstChild: FiberNode | null, newChild?: any) => FiberNode | null}
+ *          返回一个子节点协调函数。该函数接收父 Fiber 节点 (`returnFiber`)、
+ *          当前（旧的）第一个子 Fiber 节点 (`currentFirstChild`) 以及新的子节点 (`newChild`)，
+ *          然后执行协调逻辑，并返回新创建或复用的第一个子 work-in-progress Fiber 节点。
  */
 function ChildReconciler(shouldTrackEffects: boolean) {
 	/**
@@ -445,3 +456,35 @@ function updateFragment(
 
 export const reconcileChildFibers = ChildReconciler(true);
 export const mountChildFibers = ChildReconciler(false);
+
+/**
+ * @function cloneChildFibers
+ * @description 为给定的 work-in-progress (WIP) Fiber 节点 `wip` 克隆其完整的子 Fiber 节点链表。
+ *              当父 Fiber 节点 `wip` 可以在 `beginWork` 阶段进行 bailout 优化（即父节点本身不需要重新渲染），
+ *              但其子树中可能仍有待处理的工作（例如，子节点有自己的更新或 context 变化）时，
+ *              此函数被调用。它会遍历 `wip` 的原始子节点 (从 `wip.child` 开始及其所有兄弟节点)，
+ *              并为每个原始子节点创建一个对应的 WIP Fiber 节点副本。
+ *              这些新的 WIP 子节点会被正确地链接（通过 `child` 和 `sibling` 指针），
+ *              并设置其 `return` 指针指向 `wip`。
+ *
+ * @param {FiberNode} wip - 父 work-in-progress Fiber 节点，其子节点链表将被克隆。
+ */
+export function cloneChildFibers(wip: FiberNode) {
+	// child  sibling
+	if (wip.child === null) {
+		return;
+	}
+	let currentChild = wip.child;
+	let newChild = createWorkInProgress(currentChild, currentChild.pendingProps);
+	wip.child = newChild;
+	newChild.return = wip;
+
+	while (currentChild.sibling !== null) {
+		currentChild = currentChild.sibling;
+		newChild = newChild.sibling = createWorkInProgress(
+			newChild,
+			newChild.pendingProps
+		);
+		newChild.return = wip;
+	}
+}

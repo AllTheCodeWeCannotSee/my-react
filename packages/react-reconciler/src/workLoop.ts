@@ -96,22 +96,11 @@ function prepareFreshStack(root: FiberRootNode, lane: Lane) {
 	workInProgressThrownValue = null;
 }
 
-/**
- * @function scheduleUpdateOnFiber
- * @description 当一个 Fiber 节点（例如，通过 `setState` 或 `forceUpdate`）触发更新时，
- *              调用此函数来启动整个更新的调度流程。
- *              它会：
- *              1. 从触发更新的 Fiber 节点向上遍历，找到其所属的 FiberRootNode。
- *              2. 调用 `markRootUpdated` 将本次更新的优先级 (`lane`) 合并到 FiberRootNode 的 `pendingLanes` 中。
- *              3. 调用 `ensureRootIsScheduled` 来确保 FiberRootNode 的更新任务被正确调度。
- * @param {FiberNode} fiber - 触发更新的 Fiber 节点。
- * @param {Lane} lane - 本次更新的优先级 Lane。
- */
 export function scheduleUpdateOnFiber(fiber: FiberNode, lane: Lane) {
 	/**
 	 * @param root fiberRootNode
 	 */
-	const root = markUpdateFromFiberToRoot(fiber);
+	const root = markUpdateLaneFromFiberToRoot(fiber, lane);
 	markRootUpdated(root, lane);
 	ensureRootIsScheduled(root);
 }
@@ -205,15 +194,16 @@ export function ensureRootIsScheduled(root: FiberRootNode) {
 export function markRootUpdated(root: FiberRootNode, lane: Lane) {
 	root.pendingLanes = mergeLanes(root.pendingLanes, lane);
 }
-/**
- * @description 找到这个 Fiber 节点所属的那个唯一的 FiberRootNode
- * @param fiber
- * @returns FiberRootNode
- */
-export function markUpdateFromFiberToRoot(fiber: FiberNode) {
+
+export function markUpdateLaneFromFiberToRoot(fiber: FiberNode, lane: Lane) {
 	let node = fiber;
 	let parent = node.return;
 	while (parent !== null) {
+		parent.childLanes = mergeLanes(parent.childLanes, lane);
+		const alternate = parent.alternate;
+		if (alternate !== null) {
+			alternate.childLanes = mergeLanes(alternate.childLanes, lane);
+		}
 		node = parent;
 		parent = node.return;
 	}
@@ -332,6 +322,8 @@ function performSyncWorkOnRoot(root: FiberRootNode) {
 	}
 }
 
+let c = 0;
+
 /**
  * @function renderRoot
  * @description Render 阶段的核心函数。它负责根据给定的优先级 (`lane`)
@@ -385,6 +377,11 @@ function renderRoot(root: FiberRootNode, lane: Lane, shouldTimeSlice: boolean) {
 		} catch (e) {
 			if (__DEV__) {
 				console.warn('workLoop发生错误', e);
+			}
+			c++;
+			if (c > 20) {
+				break;
+				console.warn('break!');
 			}
 			handleThrow(root, e);
 		}

@@ -17,10 +17,12 @@ import {
 	Fragment,
 	ContextProvider,
 	OffscreenComponent,
-	SuspenseComponent
+	SuspenseComponent,
+	MemoComponent
 } from './workTags';
 import { popProvider } from './fiberContext';
 import { popSuspenseHandler } from './suspenseContext';
+import { mergeLanes, NoLanes } from './fiberLanes';
 
 function markRef(fiber: FiberNode) {
 	fiber.flags |= Ref;
@@ -88,6 +90,7 @@ export const completeWork = (wip: FiberNode) => {
 		case FunctionComponent:
 		case Fragment:
 		case OffscreenComponent:
+		case MemoComponent:
 			bubbleProperties(wip);
 			return null;
 		case ContextProvider:
@@ -181,10 +184,17 @@ function appendAllChildren(parent: Container | Instance, wip: FiberNode) {
 function bubbleProperties(wip: FiberNode) {
 	let subtreeFlags = NoFlags;
 	let child = wip.child;
+	let newChildLanes = NoLanes;
 
 	while (child !== null) {
 		subtreeFlags |= child.subtreeFlags;
 		subtreeFlags |= child.flags;
+
+		// child.lanes child.childLanesAdd commentMore actions
+		newChildLanes = mergeLanes(
+			newChildLanes,
+			mergeLanes(child.lanes, child.childLanes)
+		);
 
 		// 确保子节点的 return 指针正确地指向 wip (当前父节点)
 		// 这一步主要是为了维护 Fiber 树结构的正确性，
@@ -193,4 +203,5 @@ function bubbleProperties(wip: FiberNode) {
 		child = child.sibling;
 	}
 	wip.subtreeFlags |= subtreeFlags;
+	wip.childLanes = newChildLanes;
 }

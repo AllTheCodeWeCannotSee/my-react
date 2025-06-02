@@ -30,18 +30,15 @@ export function mergeLanes(laneA: Lane, laneB: Lane): Lanes {
 }
 
 /**
- * @function requestUpdateLane
  * @description 请求一个用于更新的优先级 Lane。
  *              它首先检查当前是否处于一个 transition 过程中 (通过 `ReactCurrentBatchConfig.transition`)。
  *              如果是，则返回 `TransitionLane`。
  *              否则，它会从 Scheduler 包获取当前的调度优先级，
  *              然后将这个 Scheduler 优先级转换为 React 内部使用的 Lane。
  *              这个 Lane 代表了本次更新的紧急程度或类型。
- *
- *
  * @returns {Lane} 根据当前 Scheduler 的优先级转换得到的 Lane。
- *                 如果 Scheduler 的优先级无法直接映射到一个已定义的 Lane，
- *                 则可能返回 `NoLane` (取决于 `schedulerPriorityToLane` 的实现)。
+ *                 如果不在 transition 中，且 Scheduler 的优先级无法直接映射到一个已定义的 Lane
+ *                 (例如 IdlePriority 或 LowPriority)，则可能返回 `NoLane` (取决于 `schedulerPriorityToLane` 的实现)。
  * @see {@link schedulerPriorityToLane} - 用于将 Scheduler 优先级转换为 Lane 的函数。
  * @see {@link unstable_getCurrentPriorityLevel} - Scheduler 包中用于获取当前调度优先级的函数。
  */
@@ -147,6 +144,22 @@ export function markRootSuspended(root: FiberRootNode, suspendedLane: Lane) {
 	root.pingedLanes &= ~suspendedLane;
 }
 
+/**
+ * @function getNextLane
+ * @description 从 FiberRootNode 中获取下一个要处理的最高优先级 Lane。
+ *              它会考虑待处理的 lanes (`pendingLanes`)，并排除掉当前被挂起的 lanes (`suspendedLanes`)。
+ *              如果所有待处理的 lanes 都被挂起了，它会检查是否有被 ping 过的 lanes (`pingedLanes`) 可以处理。
+ *
+ * @param {FiberRootNode} root - 当前应用的 FiberRootNode 实例。
+ * @returns {Lane} 返回下一个要处理的最高优先级 Lane。
+ *                 如果没有任何可处理的 Lane (所有 pendingLanes 都被 suspended 且没有 pingedLanes)，
+ *                 或者根本没有 pendingLanes，则返回 `NoLane`。
+ *
+ * @example
+ * // root.pendingLanes = 0b00110 (DefaultLane | InputContinuousLane)
+ * // root.suspendedLanes = 0b00010 (InputContinuousLane is suspended)
+ * // getNextLane(root) will return 0b00100 (DefaultLane)
+ */
 export function getNextLane(root: FiberRootNode): Lane {
 	const pendingLanes = root.pendingLanes;
 
@@ -166,4 +179,32 @@ export function getNextLane(root: FiberRootNode): Lane {
 		}
 	}
 	return nextLane;
+}
+
+/**
+ * @function includeSomeLanes
+ * @description 检查一个 Lanes 集合 (`set`) 是否包含另一个 Lanes 集合或单个 Lane (`subset`) 中的任何一个 Lane。
+ *              换句话说，它判断两个 Lanes 集合之间是否存在交集。
+ *
+ * @param {Lanes} set - 第一个 Lanes 集合。
+ * @param {Lane | Lanes} subset - 第二个 Lanes 集合或单个 Lane，用于检查是否与 `set` 有交集。
+ * @returns {boolean} 如果 `set` 和 `subset` 之间至少有一个共同的 Lane (即它们的按位与结果不为 `NoLanes`)，则返回 `true`；否则返回 `false`。
+ *
+ * @example
+ * // includeSomeLanes(0b0110, 0b0010) === true (both include InputContinuousLane)
+ * // includeSomeLanes(0b0100, 0b0010) === false (no common lanes)
+ */
+export function includeSomeLanes(set: Lanes, subset: Lane | Lanes): boolean {
+	return (set & subset) !== NoLanes;
+}
+
+/**
+ * @function removeLanes
+ * @description 从一个 Lanes 集合 (`set`) 中移除另一个 Lanes 集合或单个 Lane (`subset`) 中包含的所有 Lanes。
+ * @param {Lanes} set - 原始的 Lanes 集合。
+ * @param {Lanes | Lane} subset - 要从 `set` 中移除的 Lanes 集合或单个 Lane。
+ * @returns {Lanes} 返回一个新的 Lanes 集合，它是 `set` 中移除了 `subset` 中所有 Lanes 之后的结果。
+ */
+export function removeLanes(set: Lanes, subet: Lanes | Lane): Lanes {
+	return set & ~subet;
 }

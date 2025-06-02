@@ -6,15 +6,86 @@ import {
 	HostComponent,
 	OffscreenComponent,
 	SuspenseComponent,
-	WorkTag
+	WorkTag,
+	MemoComponent
 } from './workTags';
 import { Flags, NoFlags } from './fiberFlags';
 import { Container } from 'hostConfig';
 import { Lane, Lanes, NoLane, NoLanes } from './fiberLanes';
 import { Effect } from './fiberHooks';
 import { CallbackNode } from 'scheduler';
-import { REACT_PROVIDER_TYPE, REACT_SUSPENSE_TYPE } from 'shared/ReactSymbols';
+import {
+	REACT_PROVIDER_TYPE,
+	REACT_SUSPENSE_TYPE,
+	REACT_MEMO_TYPE
+} from 'shared/ReactSymbols';
 
+import { ContextItem } from './fiberContext';
+
+/**
+ * @interface FiberDependencies
+ * @description 存储一个 Fiber 节点所依赖的 Context 列表以及与这些依赖相关的 Lanes。
+ *              当一个组件通过 `useContext` 消费 Context 时，如果 Context 的值发生变化，
+ *              React 需要知道哪些 Fiber 节点依赖了这个 Context，以便重新调度它们进行更新。
+ *              这个接口的实例通常存储在 Fiber 节点的 `dependencies` 属性上。
+ *
+ * @template Value - Context 所持有的值的类型。
+ * @property {ContextItem<Value> | null} firstContext - 指向该 Fiber 节点所消费的 Context 链表中的第一个 ContextItem。
+ *                                                      每个 ContextItem 代表一个被消费的 Context 及其在该 Fiber 中的值。
+ * @property {Lanes} lanes - 一个 Lanes 位掩码，表示与此 Fiber 节点的 Context 依赖相关的更新优先级。
+ *                           当依赖的 Context 值发生变化时，会使用这些 Lanes 来调度更新。
+ */
+interface FiberDependencies<Value> {
+	firstContext: ContextItem<Value> | null;
+	lanes: Lanes;
+}
+
+/**
+ * @class FiberNode
+ * @description 表示 React 内部工作单元的核心数据结构。
+ *              每个 FiberNode 对应于一个组件实例、DOM 元素、Fragment 或其他 React 结构。
+ *              Fiber 树是 React 用来管理组件状态、props、更新和副作用的内部表示。
+ *              它支持增量渲染和并发模式。
+ *
+ * @property {any} type - Fiber 节点的类型。
+ *                        - 对于类组件，是组件的构造函数。
+ *                        - 对于函数组件，是组件函数本身。
+ *                        - 对于宿主组件 (DOM 元素)，是标签名字符串 (如 'div')。
+ *                        - 对于 Fragment 等，是特殊的 Symbol。
+ * @property {WorkTag} tag - 标识 Fiber 节点具体类型的数字标签 (如 FunctionComponent, HostComponent)。
+ * @property {Props} pendingProps - 即将在此次渲染中应用的 props。
+ * @property {Key | null} key - React 元素的 key，用于优化列表协调。
+ * @property {any} stateNode - 与 Fiber 节点关联的实例。
+ *                             - 对于类组件，是组件实例。
+ *                             - 对于宿主组件，是 DOM 元素实例。
+ *                             - 对于 HostRoot，是 FiberRootNode 实例。
+ *                             - 对于函数组件，通常为 null。
+ * @property {Ref | null} ref - 指向组件实例或 DOM 元素的 ref。
+ * @property {FiberNode | null} return - 指向父 Fiber 节点。
+ * @property {FiberNode | null} sibling - 指向下一个兄弟 Fiber 节点。
+ * @property {FiberNode | null} child - 指向第一个子 Fiber 节点。
+ * @property {number} index - 当前 Fiber 节点在其父节点的子节点列表中的索引。
+ * @property {Props | null} memoizedProps - 上一次渲染完成时应用的 props。
+ * @property {any} memoizedState - 上一次渲染完成时的状态。
+ *                                 - 对于类组件，是组件的 state 对象。
+ *                                 - 对于函数组件，是 Hooks 链表的头节点。
+ *                                 - 对于 HostRoot，是根元素 (如 `<App />`)。
+ * @property {FiberNode | null} alternate - 指向与当前 Fiber 节点对应的另一棵树中的 Fiber 节点 (current 树或 work-in-progress 树)。
+ * @property {Flags} flags - 描述此 Fiber 节点需要执行的副作用的位掩码 (如 Placement, Update)。
+ * @property {Flags} subtreeFlags - 描述此 Fiber 节点的子树中需要执行的副作用的位掩码。
+ * @property {unknown} updateQueue - 与此 Fiber 节点相关的更新队列。
+ *                                   - 对于 HostRoot，存储根元素的更新。
+ *                                   - 对于函数组件，存储 Hooks (特别是 useState, useEffect) 的更新队列和 Effect 链表。
+ * @property {FiberNode[] | null} deletions - 一个数组，存储在此次更新中需要被删除的子 Fiber 节点。
+ * @property {Lanes} lanes - 一个位掩码，表示此 Fiber 节点上待处理的更新的优先级。
+ * @property {Lanes} childLanes - 一个位掩码，表示此 Fiber 节点的子树中待处理的更新的优先级。
+ * @property {FiberDependencies<any> | null} dependencies - 存储此 Fiber 节点所依赖的 Context 列表及其相关 Lanes。
+ *
+ * @constructor
+ * @param {WorkTag} tag - Fiber 节点的类型标签。
+ * @param {Props} pendingProps - 初始的 props。
+ * @param {Key | null} key - React 元素的 key。
+ */
 export class FiberNode {
 	type: any;
 	tag: WorkTag;
@@ -34,32 +105,17 @@ export class FiberNode {
 	flags: Flags;
 	subtreeFlags: Flags;
 	updateQueue: unknown;
-
-	// 这个属性是一个数组，它持有那些需要从 DOM 中移除的子 FiberNode 的引用。
 	deletions: FiberNode[] | null;
+
+	lanes: Lanes;
+	childLanes: Lanes;
+	dependencies: FiberDependencies<any> | null;
 
 	constructor(tag: WorkTag, pendingProps: Props, key: Key) {
 		// 实例
 		this.tag = tag;
 		this.key = key || null;
-
-		// 对于类组件 (Class Component) Fiber 节点, stateNode 指向的是该类组件的实例
-		// 对于宿主组件 (Host Component) Fiber 节点, stateNode 指向的是该 Fiber 节点对应的真实 DOM 元素
-		// 对于函数组件 (Function Component) Fiber 节点, 在现代 React (特别是引入 Hooks 之后)，函数组件本身没有实例。因此，对于函数组件的 Fiber 节点，stateNode 通常是 null。函数组件的状态和副作用是通过 Hooks 来管理的，这些信息存储在 Fiber 节点的其他属性上（如 memoizedState，用于存储 Hooks 的链表）。
-		// 对于宿主根节点 (Host Root) Fiber 节点, stateNode 指向的是 FiberRoot 对象
-		// 对于宿主文本节点 (Host Text) Fiber 节点, stateNode 指向的是该文本对应的真实 DOM 文本节点 (Text Node)
 		this.stateNode = null;
-
-		// 对于类组件 (Class Component) Fiber 节点：
-		// type 指向的是该类组件的构造函数 (constructor) 本身。例如，如果你定义了一个组件 class MyComponent extends React.Component {...}，那么代表 <MyComponent /> 的 Fiber 节点的 type 就是 MyComponent 这个类。
-		// 对于函数组件 (Function Component) Fiber 节点：
-		// type 指向的是该函数组件本身。例如，如果你定义了一个组件 function MyFunctionComponent() {...} 或者 const MyFunctionComponent = () => {...}，那么代表 <MyFunctionComponent /> 的 Fiber 节点的 type 就是 MyFunctionComponent 这个函数。
-		// 对于宿主组件 (Host Component) Fiber 节点 (例如 <div>, <span>, <p> 等原生 DOM 元素)：
-		// type 是一个字符串，表示该 DOM 元素的标签名。例如，对于一个 <div> 元素，其 Fiber 节点的 type 就是字符串 "div"。
-		// 对于原生 React 元素，如 Fragment、Profiler、StrictMode、Suspense、ContextProvider、ContextConsumer 等：
-		// type 通常是 React 内部定义的特殊 Symbol 值或者对象，用来标识这些特定的 React 结构。例如，Fragment 的 type 是 REACT_FRAGMENT_TYPE 这个 Symbol。
-		// 对于宿主文本节点 (Host Text) Fiber 节点：
-		// 文本节点没有 type 属性，因为它们的内容直接存储在 pendingProps (或 memoizedProps) 中。通常，React 会根据父组件的 children 来创建文本节点。
 		this.type = null;
 
 		// 构成树状结构
@@ -67,22 +123,12 @@ export class FiberNode {
 		this.sibling = null;
 		this.child = null;
 		this.index = 0;
-
 		this.ref = null;
 
 		// 作为工作单元
 		this.pendingProps = pendingProps; // pendingProps 指的是组件从 React 元素（即 JSX 中定义的）接收到的，即将要应用的 props
 		this.memoizedProps = null; // memoizedProps 指的是在上一次渲染（render）过程中，组件最终实际使用的 props
 		this.memoizedState = null;
-
-		// 对于 HostRoot Fiber:
-		// 是 UpdateQueue<ReactElementType | null> 类型的实例，
-		// 这个队列的 shared.pending 属性会持有一个循环链表，
-		// 链表中的每个节点是一个 Update 对象，
-		// 每个 Update 对象的 payload 就是要渲染到根节点的 React 元素（例如 <App />）或者 null（用于卸载）。
-
-		// 对于 FunctionComponent Fiber:
-		// 用来存储一个 FCUpdateQueue 对象
 		this.updateQueue = null;
 		this.alternate = null;
 
@@ -90,6 +136,11 @@ export class FiberNode {
 		this.flags = NoFlags;
 		this.subtreeFlags = NoFlags;
 		this.deletions = null;
+
+		this.lanes = NoLanes;
+		this.childLanes = NoLanes;
+
+		this.dependencies = null;
 	}
 }
 
@@ -200,14 +251,40 @@ export const createWorkInProgress = (
 	wip.memoizedState = current.memoizedState;
 	wip.ref = current.ref;
 
+	wip.lanes = current.lanes;
+	wip.childLanes = current.childLanes;
+
+	const currentDeps = current.dependencies;
+	wip.dependencies =
+		currentDeps === null
+			? null
+			: {
+					lanes: currentDeps.lanes,
+					firstContext: currentDeps.firstContext
+				};
+
 	// 5. 返回 work-in-progress FiberNode
 	return wip;
 };
 
 /**
- * @description 根据一个 React Element 创建一个新的 FiberNode 实例。
- * @param element
- * @returns
+ * @function createFiberFromElement
+ * @description 根据一个 React Element (`element`) 创建一个新的 FiberNode 实例。
+ *              此函数会：
+ *              1. 从 `element` 中解构出 `type`, `key`, `props`, 和 `ref`。
+ *              2. 根据 `element.type` 的类型来确定新 FiberNode 的 `fiberTag` (WorkTag)：
+ *                 - 如果 `type` 是字符串 (如 'div')，则 `fiberTag` 为 `HostComponent`。
+ *                 - 如果 `type` 是一个对象，则检查其 `$$typeof` 属性：
+ *                   - 如果是 `REACT_PROVIDER_TYPE`，则 `fiberTag` 为 `ContextProvider`。
+ *                   - 如果是 `REACT_MEMO_TYPE`，则 `fiberTag` 为 `MemoComponent`。
+ *                   - 其他对象类型会触发开发环境下的警告。
+ *                 - 如果 `type` 是 `REACT_SUSPENSE_TYPE` (Symbol)，则 `fiberTag` 为 `SuspenseComponent`。
+ *                 - 如果 `type` 是函数 (默认情况)，则 `fiberTag` 为 `FunctionComponent`。
+ *                 - 其他未识别的 `type` 会触发开发环境下的警告。
+ *              3. 使用确定的 `fiberTag`、`props` 和 `key` 创建一个新的 `FiberNode` 实例。
+ *              4. 将 `element.type` 赋值给 `fiber.type`，并将 `element.ref` 赋值给 `fiber.ref`。
+ * @param {ReactElementType} element - 用于创建 FiberNode 的 React 元素。
+ * @returns {FiberNode} 返回新创建的 FiberNode 实例。
  */
 export function createFiberFromElement(element: ReactElementType): FiberNode {
 	const { type, key, props, ref } = element;
@@ -216,11 +293,18 @@ export function createFiberFromElement(element: ReactElementType): FiberNode {
 	if (typeof type === 'string') {
 		// <div/> type: 'div'
 		fiberTag = HostComponent;
-	} else if (
-		typeof type === 'object' &&
-		type.$$typeof === REACT_PROVIDER_TYPE
-	) {
-		fiberTag = ContextProvider;
+	} else if (typeof type === 'object') {
+		switch (type.$$typeof) {
+			case REACT_PROVIDER_TYPE:
+				fiberTag = ContextProvider;
+				break;
+			case REACT_MEMO_TYPE:
+				fiberTag = MemoComponent;
+				break;
+			default:
+				console.warn('未定义的type类型', element);
+				break;
+		}
 	} else if (type === REACT_SUSPENSE_TYPE) {
 		fiberTag = SuspenseComponent;
 	} else if (typeof type !== 'function' && __DEV__) {
