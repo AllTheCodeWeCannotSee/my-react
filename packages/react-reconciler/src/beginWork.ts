@@ -341,16 +341,7 @@ function updateFunctionComponent(
 /**
  * @function updateHostRoot
  * @description 处理 HostRoot 类型的 Fiber 节点的 `beginWork` 逻辑。
- *              HostRoot Fiber 代表整个 React 应用的根。此函数的主要职责是：
- *              1. 从 `wip.updateQueue` (HostRoot 的更新队列) 中处理待处理的更新。
- *                 这些更新通常是由 `ReactDOM.render` 或后续的 `setState` 调用触发的，
- *                 它们包含了新的 React 元素 (应用的根组件)。
- *              2. 调用 `processUpdateQueue` 来计算新的 `memoizedState`。
- *                 对于 HostRoot，`memoizedState` 存储的是其子 React 元素。
- *              3. 检查是否可以进行 bailout 优化：如果新的子元素与旧的子元素相同，
- *                 则调用 `bailoutOnAlreadyFinishedWork` 尝试跳过子节点的处理。
- *              4. 如果不能 bailout，则调用 `reconcileChildren` 来协调新的子 React 元素，
- *                 生成新的子 work-in-progress Fiber 节点。
+ *              HostRoot Fiber 代表整个 React 应用的根。
  * @param {FiberNode} wip - 当前正在处理的 HostRoot 类型的 work-in-progress Fiber 节点。
  * @param {Lane} renderLane - 当前渲染工作的优先级 Lane。
  * @returns {FiberNode | null} 返回下一个要处理的 Fiber 节点 (即 HostRoot 的第一个子节点)，或者在 bailout 时返回 `null`。
@@ -365,6 +356,7 @@ function updateHostRoot(wip: FiberNode, renderLane: Lane) {
 	const { memoizedState } = processUpdateQueue(baseState, pending, renderLane);
 
 	wip.memoizedState = memoizedState;
+	console.log('updateHostRoot');
 
 	const current = wip.alternate;
 	// 考虑RootDidNotComplete的情况，需要复用memoizedState

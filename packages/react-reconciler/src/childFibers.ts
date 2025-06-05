@@ -183,7 +183,8 @@ function ChildReconciler(shouldTrackEffects: boolean) {
 	}
 
 	/**
-	 * @description 是否是新创建的节点（且在更新阶段）来打上 Placement 标记。
+	 * @description update 且 current tree 没有对应的的节点时，打上 Placement 标记。
+	 * 				mount 时不打标记
 	 * @param fiber wip-fiber-node
 	 * @returns （可能会）打上 Placement flag 的原 fiber 节点
 	 */
