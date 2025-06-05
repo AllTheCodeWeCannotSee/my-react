@@ -362,8 +362,8 @@ function updateHostRoot(wip: FiberNode, renderLane: Lane) {
 	updateQueue.shared.pending = null;
 	const prevChildren = wip.memoizedState;
 
-	// memoizedState：当前的hostRoot的最新的状态
 	const { memoizedState } = processUpdateQueue(baseState, pending, renderLane);
+
 	wip.memoizedState = memoizedState;
 
 	const current = wip.alternate;
@@ -374,7 +374,6 @@ function updateHostRoot(wip: FiberNode, renderLane: Lane) {
 		}
 	}
 
-	// nextChildren: 子节点的reactElement
 	const nextChildren = wip.memoizedState;
 	if (prevChildren === nextChildren) {
 		return bailoutOnAlreadyFinishedWork(wip, renderLane);

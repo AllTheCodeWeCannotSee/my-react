@@ -167,6 +167,35 @@ export interface PendingPassiveEffects {
 }
 
 // FiberRootNode 是 React 应用中所有 Fiber 节点的根，它代表了整个应用的实例
+/**
+ * @class FiberRootNode
+ * @description FiberRootNode 是 React 应用中所有 Fiber 节点的根，它代表了整个应用的实例。
+ *              它持有整个应用的状态、待处理的更新、以及与调度器相关的回调信息。
+ *
+ * @property {Container} container - 指的是承载整个 React 应用的实际 DOM 元素。
+ * @property {FiberNode} current - 指向当前渲染树 (current tree) 的 HostRoot Fiber 节点。
+ *                                 这个 HostRoot Fiber 节点的 stateNode 会反向指向这个 FiberRootNode。
+ * @property {FiberNode | null} finishedWork - 指向在一次渲染周期中构建完成的 work-in-progress (WIP) Fiber 树的根节点 (HostRoot Fiber)。
+ *                                            在 commit 阶段，如果渲染成功完成，此属性会被设置，并在 commit 完成后重置为 null。
+ * @property {Lanes} pendingLanes - 一个 Lanes 位掩码，表示在整个应用根节点上所有待处理的更新的优先级集合。
+ * @property {Lanes} suspendedLanes - 一个 Lanes 位掩码，表示当前因 Suspense 挂起而无法完成的更新的优先级集合。
+ * @property {Lanes} pingedLanes - 一个 Lanes 位掩码，表示那些之前被挂起但现在因数据加载完成 (ping) 而可以尝试恢复的更新的优先级集合。
+ * @property {Lane} finishedLane - 本次更新周期成功完成并提交的最高优先级 Lane。在 commit 完成后重置为 NoLane。
+ * @property {PendingPassiveEffects} pendingPassiveEffects - 一个对象，用于收集在 commit 阶段需要异步执行的被动副作用 (useEffect 的创建和销毁回调)。
+ *                                                          包含 'unmount' 和 'update' 两个 Effect 数组。
+ * @property {CallbackNode | null} callbackNode - Scheduler 返回的用于表示当前已调度任务的回调节点。
+ *                                                用于取消或跟踪由 React 调度器安排的宏任务。
+ * @property {Lane} callbackPriority - 当前已调度任务的优先级 Lane。用于避免重复调度相同优先级的任务。
+ * @property {WeakMap<Wakeable<any>, Set<Lane>> | null} pingCache - 一个 WeakMap，用于存储因 Suspense 挂起而关联的 Wakeable (如 Promise)
+ *                                                                 与需要被 ping 的 Lanes 集合之间的映射。
+ *                                                                 当 Wakeable 完成时，会根据此缓存来重新调度相关 Lanes 的更新。
+ *
+ * @constructor
+ * @param {Container} container - 真实的 DOM 容器元素，React 应用将渲染到这个元素内部。
+ * @param {FiberNode} hostRootFiber - 与此 FiberRootNode 关联的 HostRoot Fiber 节点。
+ *                                    这个 FiberNode 将成为 `current` 树的根。
+ */
+
 export class FiberRootNode {
 	// container 指的是承载整个 React 应用的实际 DOM 元素。
 	container: Container;
@@ -207,26 +236,36 @@ export class FiberRootNode {
 }
 
 /**
+ * @function createWorkInProgress
+ * @description 负责创建或复用一个与 current Fiber 节点相对应的 work-in-progress (WIP) Fiber 节点。
+ *              这是 React 双缓冲（double buffering）机制的关键部分。
+ *              在渲染周期开始时，React 会为当前树 (current tree) 中的每个 Fiber 节点
+ *              创建一个对应的 WIP Fiber 节点副本，或者复用上一次渲染周期中未提交的 WIP 节点。
+ *              这个 WIP 节点将在 Render 阶段被处理和修改。
  *
- * @description 负责创建或复用一个与 current Fiber 节点相对应的 wip Fiber 节点
- * @param current current node，来自当前已渲染树的 FiberNode
- * @param pendingProps 新 props
- * @returns {FiberNode}
- * * 类型：wip fibernode
- * * 结构：
- * 	* 实例(tag, key, stateNode, type)：赋值，数据来自 current
- * 	* 树状结构（return, sibling, child, index）：null
- * 	* 工作单元(pendingProps, memoizedProps, memoizedState, updateQueue, alternate)：赋值，数据来自 current & pendingProps
- * 	* 副作用(flags, subtreeFlags, deletions)：重置
+ *              主要逻辑：
+ *              1. 检查传入的 `current` Fiber 节点是否已经有一个 `alternate` (即对应的 WIP 节点)。
+ *              2. 如果 `alternate` 不存在 (通常发生在首次挂载时)，则创建一个全新的 `FiberNode` 作为 WIP 节点，
+ *                 并复制 `current` 的基本属性 (tag, key, stateNode, type)。同时建立 `current` 和新 WIP 节点的 `alternate` 链接。
+ *              3. 如果 `alternate` 已经存在 (通常发生在更新时)，则直接复用这个现有的 WIP 节点。
+ *                 此时，需要更新其 `pendingProps`，并重置其副作用相关的 flags (`flags`, `subtreeFlags`, `deletions`)，
+ *                 因为副作用是在 Render 阶段计算并标记的。
+ *              4. 无论创建还是复用，都会将 `current` 节点的 `type`, `updateQueue`, `child`, `memoizedProps`,
+ *                 `memoizedState`, `ref`, `lanes`, `childLanes`, 和 `dependencies` 复制到 WIP 节点上。
+ *                 这些属性代表了从 current 树继承的状态和结构，将在 Render 阶段根据 `pendingProps` 和更新队列进行修改。
+ *
+ * @param {FiberNode} current - 来自当前已渲染树 (current tree) 的 FiberNode。
+ *                              这是创建或复用 WIP 节点的蓝本。
+ * @param {Props} pendingProps - 即将应用于新 WIP 节点的 props。
+ * @returns {FiberNode} 返回新创建的或者被复用的 work-in-progress FiberNode 实例。
+ *                      这个节点将成为 Render 阶段的工作单元。
  */
 export const createWorkInProgress = (
 	current: FiberNode,
 	pendingProps: Props
 ): FiberNode => {
-	// 1. 尝试获取 alternate (如果存在的话，它是上一个渲染周期中的 wip 节点)
 	let wip = current.alternate;
 
-	// 2. 处理 "mount" 情况 (这个 Fiber 首次在 wip 树中被处理，或者没有 alternate 存在)
 	if (wip === null) {
 		// mount
 		wip = new FiberNode(current.tag, pendingProps, current.key);
@@ -234,16 +273,16 @@ export const createWorkInProgress = (
 
 		wip.alternate = current;
 		current.alternate = wip;
-		// 3. 处理 "update" 情况 (一个 alternate/wip 节点已经存在，所以我们复用它)
 	} else {
 		// update
 		wip.pendingProps = pendingProps;
+		// 清除副作用
 		wip.flags = NoFlags;
 		wip.subtreeFlags = NoFlags;
 		wip.deletions = null;
 	}
 
-	// 4. mount 和 update 情况下都会复制/设置的通用属性：
+	// mount 和 update 情况下都会复制/设置的通用属性：
 	wip.type = current.type;
 	wip.updateQueue = current.updateQueue;
 	wip.child = current.child;
@@ -263,7 +302,6 @@ export const createWorkInProgress = (
 					firstContext: currentDeps.firstContext
 				};
 
-	// 5. 返回 work-in-progress FiberNode
 	return wip;
 };
 

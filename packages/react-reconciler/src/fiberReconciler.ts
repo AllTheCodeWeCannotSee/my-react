@@ -30,12 +30,27 @@ export function createContainer(container: Container) {
 }
 
 /**
+ * @function updateContainer
  * @description 触发 React 应用的渲染或更新流程。
- *              它会创建一个更新对象，将其入队到 HostRoot Fiber 的更新队列中，
- *              然后调度一次新的渲染工作。
- * @param element 要渲染的 React 元素 (例如 <App />)，或者 null (表示卸载)。
- * @param root FiberRootNode 实例，代表整个应用的根。
- * @returns 返回传入的 element
+ *              此函数是 React 渲染的入口点之一，通常在 `ReactDOM.createRoot().render()`
+ *              或后续因状态变化需要重新渲染时被间接调用。
+ *              它会：
+ *              1. 在 `unstable_ImmediatePriority` (最高优先级) 下执行，确保更新立即被处理。
+ *              2. 获取当前的 HostRoot Fiber 节点 (`root.current`)。
+ *              3. 调用 `requestUpdateLane()` 来确定本次更新的优先级 Lane。
+ *              4. 使用 `createUpdate()` 创建一个包含新 React 元素 (`element`) 和 Lane 的更新对象。
+ *              5. 使用 `enqueueUpdate()` 将此更新对象添加到 HostRoot Fiber 的更新队列中，
+ *                 并标记 HostRoot Fiber 在此 Lane 上有待处理的工作。
+ *              6. 调用 `scheduleUpdateOnFiber()` 来通知调度器，HostRoot Fiber 有新的更新需要处理，
+ *                 从而启动或继续渲染循环。
+ *
+ * @param {ReactElementType | null} element - 要渲染到容器中的 React 元素。
+ *                                          通常是应用的根组件 (例如 `<App />`)。
+ *                                          如果传入 `null`，通常表示卸载操作（尽管此实现未显式处理卸载逻辑）。
+ * @param {FiberRootNode} root - FiberRootNode 实例，代表整个 React 应用的根。
+ *                               它持有对当前 Fiber 树 (current tree) 和更新队列的引用。
+ * @returns {ReactElementType | null} 返回传入的 `element`。
+ *                                    这符合某些 React API 的行为，即 render 方法返回其渲染的元素。
  */
 export function updateContainer(
 	element: ReactElementType | null,

@@ -38,11 +38,29 @@ function markUpdate(fiber: FiberNode) {
 }
 
 /**
- * @description -
- * * 创建/更新 DOM 实例
- * * 副作用标记冒泡
- * @param wip
- * @returns
+ * @function completeWork
+ * @description "归"阶段的核心函数。当一个 Fiber 节点的子树（包括所有子节点及其后代）
+ *              的 "递" 阶段工作完成后，会调用此函数来完成该节点自身的工作。
+ *
+ *              主要职责包括：
+ *              1. **创建/更新宿主实例**: 对于 `HostComponent` (如 DOM 元素) 和 `HostText` (文本节点)，
+ *                 在挂载阶段 (`current === null`) 创建对应的真实宿主环境实例 (`stateNode`)，
+ *                 并将子孙宿主实例附加到当前实例上 (`appendAllChildren`)。
+ *                 在更新阶段 (`current !== null`)，比较新旧 props，如果需要更新，则标记 `Update` flag。
+ *                 同时处理 ref 的标记 (`Ref` flag)。
+ *              2. **处理特定组件类型**:
+ *                 - `ContextProvider`: 从上下文栈中弹出对应的 context 值 (`popProvider`)。
+ *                 - `SuspenseComponent`: 从 suspense 处理器栈中弹出 (`popSuspenseHandler`)。
+ *                   检查其子 OffscreenComponent 的可见性变化，如果变化则标记 `Visibility` flag。
+ *              3. **副作用标记冒泡**: 调用 `bubbleProperties` 函数，将子节点及其子树的副作用标记 (`flags`, `subtreeFlags`)
+ *                 以及待处理的 lanes (`lanes`, `childLanes`) 向上冒泡合并到当前 `wip` 节点的 `subtreeFlags` 和 `childLanes` 属性上。
+ *                 这是在 "归" 阶段完成副作用收集的关键步骤。
+ *              4. **返回 null**: 此函数总是返回 `null`。这是因为 `completeUnitOfWork` 函数负责处理
+ *                 "归" 阶段的树遍历逻辑（向上到父节点或向旁边到兄弟节点），`completeWork` 只专注于完成当前节点的工作。
+ *
+ * @param {FiberNode} wip - 当前正在处理的 work-in-progress Fiber 节点。
+ * @returns {null} 此函数不返回下一个要处理的 Fiber 节点，总是返回 `null`。
+ *                 "归" 阶段的遍历逻辑由调用者 `completeUnitOfWork` 控制。
  */
 export const completeWork = (wip: FiberNode) => {
 	const newProps = wip.pendingProps;

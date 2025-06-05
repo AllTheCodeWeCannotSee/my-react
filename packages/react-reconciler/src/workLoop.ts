@@ -70,36 +70,53 @@ const SuspendedOnData = 6;
 let workInProgressSuspendedReason: SuspendedReason = NotSuspended;
 let workInProgressThrownValue: any = null;
 
-// TODO 执行过程中报错了
-
 /**
- * @function prepareFreshStack
+ * @function
  * @description 为新的渲染或更新周期准备初始环境和工作栈。
+ * 				创建一个新的双缓冲树
  *              当开始一个新的渲染任务（或者当前渲染的优先级发生变化）时，此函数会被调用。
- *              它会：
- *              1. 重置 FiberRootNode 上的 `finishedLane` 和 `finishedWork`。
- *              2. 基于当前 Fiber 树的根 (`root.current`) 创建一个新的 work-in-progress (WIP) Fiber 树的根 (`workInProgress`)。
- *              3. 设置全局变量 `wipRootRenderLane` 为当前更新的优先级 (`lane`)。
- *              4. 重置与当前渲染相关的全局状态，如 `workInProgressRootExitStatus`, `workInProgressSuspendedReason`, 和 `workInProgressThrownValue`。
- *
  * @param {FiberRootNode} root - FiberRootNode 实例，代表整个应用的根。
  * @param {Lane} lane - 本次更新工作的优先级 Lane。
  */
 function prepareFreshStack(root: FiberRootNode, lane: Lane) {
 	root.finishedLane = NoLane;
 	root.finishedWork = null;
-	workInProgress = createWorkInProgress(root.current, {});
-	wipRootRenderLane = lane;
 
+	// 新的双缓冲树
+	workInProgress = createWorkInProgress(root.current, {});
+
+	wipRootRenderLane = lane;
 	workInProgressRootExitStatus = RootInProgress;
 	workInProgressSuspendedReason = NotSuspended;
 	workInProgressThrownValue = null;
 }
 
+/**
+ * @function scheduleUpdateOnFiber
+ * @description 调度一个在特定 Fiber 节点上发生的更新。
+ *              此函数是触发 React 更新流程的关键入口之一，通常在以下情况被调用：
+ *              - `setState` 或 `forceUpdate` 在组件中被调用。
+ *              - `ReactDOM.render` 或 `createRoot().render()` 被调用以更新根节点。
+ *              - Context 值发生变化，需要更新消费该 Context 的组件。
+ *
+ *              主要步骤：
+ *              1. 调用 `markUpdateLaneFromFiberToRoot(fiber, lane)`:
+ *                 从当前 `fiber` 节点开始，向上遍历到根节点，
+ *                 并将 `lane` (更新的优先级) 合并到路径上每个父节点的 `childLanes` 中。
+ *                 这确保了从更新源头到根节点的整条路径都被标记上相应的优先级。
+ *                 此函数返回 FiberRootNode。
+ *              2. 调用 `markRootUpdated(root, lane)`:
+ *                 将 `lane` 合并到 `root.pendingLanes` 中，标记根节点在此优先级上有待处理的工作。
+ *              3. 调用 `ensureRootIsScheduled(root)`:
+ *                 检查根节点上所有待处理的更新，并根据最高优先级决定是否以及如何调度一个新的渲染任务
+ *                 (可能是同步的微任务或异步的宏任务)。
+ *
+ * @param {FiberNode} fiber - 触发更新的 Fiber 节点。
+ *                            例如，在 `setState` 中，这是调用 `setState` 的组件对应的 Fiber 节点。
+ * @param {Lane} lane - 本次更新的优先级 Lane。
+ *                      这个 Lane 通常由 `requestUpdateLane()` 根据当前执行上下文（如是否在 transition 中）确定。
+ */
 export function scheduleUpdateOnFiber(fiber: FiberNode, lane: Lane) {
-	/**
-	 * @param root fiberRootNode
-	 */
 	const root = markUpdateLaneFromFiberToRoot(fiber, lane);
 	markRootUpdated(root, lane);
 	ensureRootIsScheduled(root);
@@ -195,6 +212,24 @@ export function markRootUpdated(root: FiberRootNode, lane: Lane) {
 	root.pendingLanes = mergeLanes(root.pendingLanes, lane);
 }
 
+/**
+ * @function markUpdateLaneFromFiberToRoot
+ * @description 从指定的 Fiber 节点开始，向上遍历 Fiber 树直到根节点，
+ *              并将传入的 `lane` (更新的优先级) 合并到路径上每个父 Fiber 节点
+ *              及其 alternate 节点的 `childLanes` 属性中。
+ *              `childLanes` 用于标记一个 Fiber 节点的子树中存在哪些优先级的待处理工作。
+ *              此函数确保了从触发更新的 Fiber 到根节点的整条路径都被标记上相应的优先级，
+ *              这对于后续的调度和 bailout 优化至关重要。
+ *
+ * @param {FiberNode} fiber - 触发更新或其子孙节点触发更新的 Fiber 节点。
+ *                            这是向上标记路径的起始点。
+ * @param {Lane} lane - 需要被合并到父节点 `childLanes` 中的更新优先级 Lane。
+ * @returns {FiberRootNode | null} 如果成功遍历到 HostRoot Fiber 节点 (应用的根 Fiber)，
+ *                                 则返回其 `stateNode` (即 FiberRootNode 实例)。
+ *                                 如果在到达 HostRoot 之前遍历结束 (理论上不应发生在一个正常的 Fiber 树中，
+ *                                 除非 `fiber` 本身不在一个有效的 Fiber 树中或树结构不完整)，
+ *                                 则返回 `null`。
+ */
 export function markUpdateLaneFromFiberToRoot(fiber: FiberNode, lane: Lane) {
 	let node = fiber;
 	let parent = node.return;

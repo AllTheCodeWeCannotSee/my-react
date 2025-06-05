@@ -4,7 +4,25 @@ import { isSubsetOfLanes, Lane, mergeLanes, NoLane } from './fiberLanes';
 import { FiberNode } from './fiber';
 
 /**
- * @description 一个 Update 对象就代表了一次具体的“更新意图”，这个意图通过它的 action 属性来表达
+ * @interface Update
+ * @template State - Update 对象所管理的状态的类型。
+ * @description 代表一次具体的“更新意图”或“更新操作”。
+ *              当调用 `setState` 或其他触发状态更新的机制时，会创建 Update 对象。
+ *              这些对象被组织成一个更新队列，在 Fiber 节点的 `updateQueue` 属性中。
+ *              在渲染阶段，React 会处理这些 Update 对象来计算新的状态。
+ *
+ * @property {Action<State>} action - 更新操作本身。
+ *                                    它可以是新的状态值 (`State`)，也可以是一个接收前一个状态并返回新状态的函数
+ *                                    (`(prevState: State) => State`)。
+ * @property {Lane} lane - 本次更新的优先级 (Lane)。
+ * @property {Update<any> | null} next - 指向更新队列中下一个 Update 对象的指针。
+ *                                      更新队列通常实现为一个单向循环链表，`next` 用于链接这些更新。
+ *                                      如果这是队列中的最后一个更新，`next` 会指向队列的第一个更新。
+ * @property {boolean} hasEagerState - 一个布尔值，指示此更新是否已经尝试过“急切状态计算”(eager state computation)
+ *                                     并且计算出了一个 `eagerState`。
+ *                                     这是一种优化，如果预计算的状态与当前状态相同，可以跳过某些工作。
+ * @property {State | null} eagerState - 如果 `hasEagerState` 为 `true`，这里存储的是通过急切状态计算得到的预计算状态值。
+ *                                      如果 `hasEagerState` 为 `false`，或者预计算未发生，则为 `null`。
  */
 export interface Update<State> {
 	action: Action<State>;
@@ -120,6 +138,7 @@ export function basicStateReducer<State>(
 		return action(state);
 	} else {
 		// baseState 1 update 2 -> memoizedState 2
+		// <App />
 		return action;
 	}
 }
